@@ -4,9 +4,13 @@ import plotly.express as px
 from database import get_db_connection
 from datetime import datetime, timedelta
 from utils_pdf import gerar_relatorio_geral
+import pytz # Importante para corrigir o fuso horário
 
 # --- Configuração Inicial ---
 st.title("🖥️ Painel de Controle de Manutenção Agrícola")
+
+# Definição do Fuso Horário Local
+FUSO_HORARIO = pytz.timezone('America/Campo_Grande')
 
 # --- CONFIGURAÇÃO DOS FILTROS ---
 st.sidebar.header("Filtros de Visualização")
@@ -129,11 +133,15 @@ with tab_lista:
     if df_painel.empty:
         st.info("Nenhum atendimento para listar.")
     else:
-        # 1. Formatação de Datas e Nulos
+        # 1. Formatação de Datas e Nulos (BLINDADO)
         df_painel['Data_DT'] = pd.to_datetime(df_painel['Data'], format='mixed', dayfirst=True, errors='coerce')
         fim_dt = pd.to_datetime(df_painel['Fim'], format='mixed', dayfirst=True, errors='coerce')
         
-        agora = datetime.now()
+        # --- CÁLCULO TEMPO ABERTO CORRIGIDO ---
+        # Pega o 'agora' no fuso horário correto (MS)
+        # .replace(tzinfo=None) remove a info de fuso para fazer conta com a data 'naive' do banco
+        agora = datetime.now(FUSO_HORARIO).replace(tzinfo=None)
+        
         fim_calculo = fim_dt.fillna(agora)
         df_painel['delta'] = fim_calculo - df_painel['Data_DT']
         
@@ -141,10 +149,13 @@ with tab_lista:
             if pd.isnull(td): return "-"
             try:
                 total_seconds = int(td.total_seconds())
+                # Se der negativo (por erro de fuso ou relógio desajustado), retorna 0m
                 if total_seconds < 0: return "0m"
+                
                 days = total_seconds // 86400
                 hours = (total_seconds % 86400) // 3600
                 minutes = ((total_seconds % 86400) % 3600) // 60
+                
                 parts = []
                 if days > 0: parts.append(f"{days}d")
                 if hours > 0: parts.append(f"{hours}h")
@@ -154,8 +165,10 @@ with tab_lista:
 
         df_painel['Tempo_Aberto'] = df_painel['delta'].apply(formatar_delta)
         
+        # Formatação para String (Visualização)
         df_painel['Data'] = df_painel['Data_DT'].dt.strftime('%d/%m/%Y %H:%M').fillna("-")
         df_painel['Fim'] = fim_dt.dt.strftime('%d/%m/%Y %H:%M').fillna("-")
+        
         df_painel['prioridade'] = df_painel['prioridade'].fillna("Média")
         df_painel['horimetro'] = df_painel['horimetro'].fillna(0)
 
@@ -219,10 +232,10 @@ with tab_lista:
             except Exception as e: st.error(f"Erro PDF: {e}")
 
 # ------------------------------------------------------------------------------
-# ABA 2: DASHBOARD (VISUAL MELHORADO E PADRONIZADO)
+# ABA 2: DASHBOARD
 # ------------------------------------------------------------------------------
 with tab_dash:
-    # CSS Aprimorado
+    # CSS
     st.markdown("""
     <style>
     @keyframes pulse-red {
@@ -235,9 +248,8 @@ with tab_dash:
         padding: 4px 10px; border-radius: 12px; font-size: 0.8em; font-weight: bold;
         animation: pulse-red 2s infinite; display: inline-block;
     }
-    /* Botão Azul Bonito */
     div.stButton > button[kind="primary"] {
-        background-color: #2196F3; border: none; color: white;
+        background-color: #2196F3; color: white; border: none; font-weight: bold;
         transition: all 0.2s ease;
     }
     div.stButton > button[kind="primary"]:hover {
@@ -249,94 +261,71 @@ with tab_dash:
     if df_painel.empty:
         st.warning("Sem dados.")
     else:
+        col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
         total = len(df_painel)
-        # Filtra urgentes
-        df_urgentes = df_painel[df_painel['prioridade'].astype(str).str.upper() == 'ALTA']
-        urgentes = len(df_urgentes)
+        urgentes = len(df_painel[df_painel['prioridade'].astype(str).str.upper() == 'ALTA'])
         pendentes = len(df_painel[df_painel['status'].astype(str).str.upper() != 'CONCLUÍDO'])
         frotas_afetadas = df_painel[df_painel['status'].astype(str).str.upper() != 'CONCLUÍDO']['frota'].nunique()
         
-        # Layout dos KPIs
-        col1, col2, col3, col4 = st.columns(4)
+        col_kpi1.metric("Total", total)
+        
+        with col_kpi2:
+            if urgentes > 0:
+                lista_frotas = sorted(df_painel[df_painel['prioridade'].astype(str).str.upper() == 'ALTA']['frota'].astype(str).unique())
+                tooltip_text = "⚠️ FROTAS CRÍTICAS (ALTA):&#10;" + "&#10;".join(lista_frotas)
+                st.markdown(f"""
+                <div style="text-align:center; cursor: help;" title="{tooltip_text}">
+                    <p style="margin:0; color:#666; font-size:0.9rem;">Alta Prioridade</p>
+                    <p style="margin:0; font-size:2rem; font-weight:bold;">{urgentes}</p>
+                    <span class="badge-pulse">⚠️ AÇÃO</span>
+                </div>
+                """, unsafe_allow_html=True)
+                st.write("")
+                if st.button("👁️ Ver", key="btn_crit", type="primary", use_container_width=True):
+                    st.session_state['show_criticos'] = not st.session_state.get('show_criticos', False)
+            else:
+                st.metric("Alta Prioridade", 0)
 
-        # KPI 1: Total
-        with col1:
-            with st.container(border=True):
-                st.metric("Total Visualizado", total)
-
-        # KPI 2: Alta Prioridade (Com Destaque)
-        with col2:
-            # Se houver urgência, borda vermelha
-            border_color = True if urgentes > 0 else True
-            with st.container(border=True):
-                st.metric("Alta Prioridade", urgentes)
-                if urgentes > 0:
-                    # Badge Pulsante HTML
-                    st.markdown('<span class="badge-pulse">⚠️ AÇÃO NECESSÁRIA</span>', unsafe_allow_html=True)
-                    st.write("") # Espaço
-                    # Botão integrado no card
-                    if st.button("👁️ Ver Críticos", key="btn_criticos", type="primary", use_container_width=True):
-                         st.session_state['show_criticos'] = not st.session_state.get('show_criticos', False)
-                else:
-                     st.caption("Sob controle ✅")
-
-        # KPI 3: Em Aberto
-        with col3:
-            with st.container(border=True):
-                st.metric("Em Aberto", pendentes)
-
-        # KPI 4: Frotas Afetadas
-        with col4:
-            with st.container(border=True):
-                st.metric("Frotas Afetadas", frotas_afetadas)
-
-        # --- LISTA EXPANSÍVEL DE CRÍTICOS ---
+        col_kpi3.metric("Em Aberto", pendentes)
+        col_kpi4.metric("Frotas Afetadas", frotas_afetadas)
+        
         if st.session_state.get('show_criticos') and urgentes > 0:
             st.markdown("---")
-            st.markdown("### 🚨 Frotas Críticas (Prioridade Alta)")
-            
-            cols_criticas = ['Ticket', 'frota', 'modelo', 'Local', 'Operacao', 'descricao', 'Data', 'Cor_Hex']
-            df_show_urgentes = df_urgentes[cols_criticas].copy()
+            st.markdown("### 🚨 Frotas Críticas")
+            df_show = df_painel[df_painel['prioridade'].astype(str).str.upper() == 'ALTA'].copy()
+            cols_c = ['Ticket', 'frota', 'modelo', 'Local', 'Operacao', 'descricao', 'Data', 'Cor_Hex']
+            cols_c = [c for c in cols_c if c in df_show.columns]
             
             try:
-                df_styled_urg = df_show_urgentes.style.apply(colorir_linhas_hibrido, axis=1)
                 st.dataframe(
-                    df_styled_urg, use_container_width=True, hide_index=True,
-                    column_config={"Cor_Hex": None}
+                    df_show[cols_c].style.apply(colorir_linhas_hibrido, axis=1),
+                    use_container_width=True, hide_index=True, column_config={"Cor_Hex": None}
                 )
-            except:
-                st.dataframe(df_show_urgentes, use_container_width=True, hide_index=True)
-                
-            if st.button("Fechar Lista", key="btn_fechar"): 
-                st.session_state['show_criticos'] = False
-                st.rerun()
+            except: st.dataframe(df_show[cols_c], use_container_width=True)
+            
+            if st.button("Fechar"): st.session_state['show_criticos'] = False; st.rerun()
             st.markdown("---")
 
         st.divider()
-        
-        # --- GRÁFICOS LADO A LADO ---
         col_graf1, col_graf2 = st.columns(2)
         
         with col_graf1:
-            with st.container(border=True):
-                st.markdown("##### 🚜 Top Frotas (Histórico Geral)")
-                if not df_frotas_global.empty:
-                    df_frotas_global['Frota'] = df_frotas_global['Frota'].astype(str)
-                    fig_bar = px.bar(df_frotas_global, x='Qtd', y='Frota', text='Qtd', color='Qtd', orientation='h')
-                    fig_bar.update_yaxes(type='category') 
-                    fig_bar.update_layout(yaxis={'categoryorder':'total ascending'})
-                    st.plotly_chart(fig_bar, use_container_width=True)
+            st.markdown("##### 🚜 Top Frotas (Histórico Geral)")
+            if not df_frotas_global.empty:
+                df_frotas_global['Frota'] = df_frotas_global['Frota'].astype(str)
+                fig_bar = px.bar(df_frotas_global, x='Qtd', y='Frota', text='Qtd', color='Qtd', orientation='h')
+                fig_bar.update_yaxes(type='category') 
+                fig_bar.update_layout(yaxis={'categoryorder':'total ascending'})
+                st.plotly_chart(fig_bar, use_container_width=True)
 
         with col_graf2:
-            with st.container(border=True):
-                st.markdown("##### 🔧 Por Tipo")
-                df_chart_pie = df_painel.groupby('Operacao').agg(Qtd=('Ticket', 'count'), Lista=('frota', lambda x: ",".join(sorted(x.unique())))).reset_index()
-                mapa = dict(zip(df_painel['Operacao'], df_painel['Cor_Hex'])) if 'Cor_Hex' in df_painel.columns else {}
-                fig_pie = px.pie(df_chart_pie, values='Qtd', names='Operacao', color='Operacao', color_discrete_map=mapa, custom_data=['Lista'], hole=0.4)
-                fig_pie.update_traces(hovertemplate="<b>%{label}</b><br>Qtd: %{value}<br>%{customdata[0]}")
-                st.plotly_chart(fig_pie, use_container_width=True)
+            st.markdown("##### 🔧 Por Tipo")
+            df_chart_pie = df_painel.groupby('Operacao').agg(Qtd=('Ticket', 'count'), Lista=('frota', lambda x: ",".join(sorted(x.unique())))).reset_index()
+            mapa = dict(zip(df_painel['Operacao'], df_painel['Cor_Hex'])) if 'Cor_Hex' in df_painel.columns else {}
+            fig_pie = px.pie(df_chart_pie, values='Qtd', names='Operacao', color='Operacao', color_discrete_map=mapa, custom_data=['Lista'], hole=0.4)
+            fig_pie.update_traces(hovertemplate="<b>%{label}</b><br>Qtd: %{value}<br>%{customdata[0]}")
+            st.plotly_chart(fig_pie, use_container_width=True)
 
-    # --- LINHA DO TEMPO ---
     st.markdown("##### 📅 Linha do Tempo (Interativa)")
     with st.container(border=True):
         if not df_painel.empty:
