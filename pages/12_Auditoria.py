@@ -1,26 +1,20 @@
 import streamlit as st
 import pandas as pd
 import sqlite3
-import sys
-import os
 
-# Import da raiz (para verificar login)
-# Adiciona o diretório pai ao path para importar o autenticacao.py
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-import autenticacao
-
-# --- 1. SEGURANÇA ---
-# O app.py já faz a verificação básica, mas aqui reforçamos a permissão de ADMIN
-if not autenticacao.check_password():
-    st.stop()
-
-user_atual = st.session_state.get("username", "")
-if user_atual != "admin":
-    st.error("⛔ Acesso Restrito: Apenas administradores podem ver os logs de auditoria.")
-    st.stop()
+# OBS: Não importamos mais autenticacao aqui para evitar conflito.
+# O app.py já garantiu o login.
 
 st.title("🕵️ Logs de Auditoria e Rastreabilidade")
-st.markdown("Histórico completo de ações realizadas no sistema (Criação, Edição, Exclusão e Login).")
+st.markdown("Histórico completo de ações realizadas no sistema.")
+
+# --- 1. VERIFICAÇÃO DE SEGURANÇA (SOMENTE ADMIN) ---
+# Pegamos o usuário direto da sessão (que o app.py preencheu)
+user_atual = st.session_state.get("username", "")
+
+if user_atual != "admin":
+    st.error("⛔ Acesso Restrito: Apenas administradores podem ver os logs de auditoria.")
+    st.stop() # Para a execução aqui se não for admin
 
 def get_db_connection():
     conn = sqlite3.connect("manutencao.db")
@@ -62,7 +56,7 @@ if filtro_texto:
     term = f"%{filtro_texto}%"
     params.extend([term, term])
 
-query += " ORDER BY data_hora DESC LIMIT 1000" # Limite de segurança para não travar
+query += " ORDER BY data_hora DESC LIMIT 1000" # Limite de segurança
 
 conn = get_db_connection()
 try:
@@ -79,10 +73,10 @@ if df_logs.empty:
 else:
     # --- TRATAMENTO DE DATAS ROBUSTO ---
     # format='mixed' garante que o Pandas leia tanto datas com milissegundos quanto sem
-    # dayfirst=True ajuda a interpretar corretamente dias > 12
     df_logs['data_hora'] = pd.to_datetime(df_logs['data_hora'], format='mixed', dayfirst=True, errors='coerce')
     
     # Formata para exibição brasileira (Dia/Mês/Ano Hora:Min:Seg)
+    # Como removemos o tzinfo na hora de salvar (no utils_log), aqui ele exibe exatamente o que salvou (Hora Local)
     df_logs['data_formatada'] = df_logs['data_hora'].dt.strftime('%d/%m/%Y %H:%M:%S').fillna("-")
     
     # Exibição da Tabela
