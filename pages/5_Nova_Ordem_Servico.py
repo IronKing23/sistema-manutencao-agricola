@@ -210,25 +210,23 @@ with tab_manual:
                     registrar_log("CRIAR", f"OS #{tid}", f"Frota: {frota_display}")
                     st.success(f"✅ Ticket #{tid} criado!")
                 
-            except Exception as e:
-                st.error(f"Erro: {e}")
-            finally:
-                if conn:
-                    conn.close()
+            except Exception as e: st.error(f"Erro: {e}")
+            finally: if conn: conn.close()
 
 # ==============================================================================
-# ABA 2: IMPORTAÇÃO EM LOTE (INTELIGENTE: CRIA OU ATUALIZA)
+# ABA 2: IMPORTAÇÃO EM LOTE (INTELIGENTE: PROMOÇÃO DE STATUS)
 # ==============================================================================
 with tab_importar:
-    st.subheader("Importação Inteligente (Histórico e Legado)")
-    st.info("Se a frota já tiver ordem aberta, o sistema atualizará (ou fechará se houver data fim). Se não, criará uma nova.")
+    st.subheader("Importação de Legado / Histórico")
+    st.info("Utilize esta aba para carregar planilhas antigas e alimentar o histórico do sistema.")
     
     st.markdown("""
     **Colunas Aceitas (Excel):**
-    - `Frota` (Obrigatório) | `Operacao` (Obrigatório) | `Descricao` (Obrigatório) | `Local` (Obrigatório)
+    - `Frota`, `Operacao`, `Descricao`, `Local` (Obrigatórios)
     - `Data_Abertura` (Opcional)
     - `Data_Encerramento` (Opcional - **Se preenchido, encerra a ordem**)
-    - `Prioridade`, `Horimetro`, `OS_Oficial`
+    - `OS_Oficial` (Opcional - **Se preenchido, promove para Parada**)
+    - `Prioridade`, `Horimetro`
     """)
     
     uploaded_os = st.file_uploader("Carregar Planilha de Histórico", type=['xlsx', 'csv'], key="upload_os_hist")
@@ -240,7 +238,7 @@ with tab_importar:
             
             st.dataframe(df_up.head(), use_container_width=True)
             
-            if st.button("🚀 Processar Importação Inteligente"):
+            if st.button("🚀 Processar Histórico"):
                 df_up.columns = [c.title().strip() for c in df_up.columns]
                 df_up.columns = [c.replace(' ', '_').replace('ç', 'c').replace('ã', 'a') for c in df_up.columns]
 
@@ -250,7 +248,7 @@ with tab_importar:
                     st.error(f"Colunas faltando. Necessário: {req_cols}. Encontrado: {list(df_up.columns)}")
                 else:
                     conn = get_db_connection()
-                    criados = 0
+                    sucessos = 0
                     atualizados = 0
                     erros = 0
                     lista_erros = []
@@ -267,8 +265,7 @@ with tab_importar:
                             # --- TRATAMENTO DE FROTA ---
                             raw_frota = row['Frota']
                             try:
-                                if isinstance(raw_frota, float) and raw_frota.is_integer():
-                                    raw_frota = int(raw_frota)
+                                if isinstance(raw_frota, float) and raw_frota.is_integer(): raw_frota = int(raw_frota)
                             except: pass
                             f_nome = str(raw_frota).strip().upper()
                             if f_nome.endswith(".0"): f_nome = f_nome[:-2]
@@ -278,77 +275,87 @@ with tab_importar:
                                 erros += 1; continue
                             equip_id = map_frota[f_nome]
 
-                            # --- TRATAMENTO DE OPERAÇÃO (AUTO-CADASTRO) ---
-                            op_nome_original = str(row['Operacao']).strip()
-                            op_nome_key = op_nome_original.upper()
+                            # --- OPERAÇÃO ---
+                            op_nome_key = str(row['Operacao']).strip().upper()
                             op_id = map_op.get(op_nome_key)
                             if not op_id:
                                 try:
                                     cur_op = conn.cursor()
-                                    cur_op.execute("INSERT INTO tipos_operacao (nome, cor) VALUES (?, ?)", (op_nome_original, '#95A5A6'))
+                                    cur_op.execute("INSERT INTO tipos_operacao (nome, cor) VALUES (?, ?)", (str(row['Operacao']).strip(), '#95A5A6'))
                                     new_id = cur_op.lastrowid
                                     map_op[op_nome_key] = new_id
                                     op_id = new_id
-                                except:
-                                    erros += 1; continue
+                                except: erros += 1; continue
 
-                            # --- PREPARAÇÃO DOS DADOS ---
+                            # --- DADOS ---
                             desc = str(row['Descricao'])
                             local = str(row['Local'])
                             prio = str(row.get('Prioridade', 'Média')).title()
                             prio = prio if prio in ["Alta", "Média", "Baixa"] else "Média"
                             try: horim = float(row.get('Horimetro', 0))
                             except: horim = 0.0
+                            
                             os_oficial = str(row['OS_Oficial']) if 'OS_Oficial' in df_up.columns and pd.notna(row['OS_Oficial']) else None
                             
-                            # DATAS
+                            # Datas
                             data_abertura = None
                             if 'Data_Abertura' in df_up.columns and pd.notna(row['Data_Abertura']):
                                 try: data_abertura = pd.to_datetime(row['Data_Abertura'], dayfirst=True).to_pydatetime()
                                 except: pass
-                            if not data_abertura:
-                                data_abertura = datetime.now(FUSO_HORARIO).replace(tzinfo=None)
+                            if not data_abertura: data_abertura = datetime.now(FUSO_HORARIO).replace(tzinfo=None)
 
                             data_encerramento = None
                             if 'Data_Encerramento' in df_up.columns and pd.notna(row['Data_Encerramento']):
                                 try: data_encerramento = pd.to_datetime(row['Data_Encerramento'], dayfirst=True).to_pydatetime()
                                 except: pass
 
-                            # --- LÓGICA INTELIGENTE: UPDATE OU INSERT ---
-                            # 1. Verifica se já existe ordem aberta
+                            # --- LÓGICA INTELIGENTE ---
                             cursor = conn.cursor()
                             cursor.execute("""
-                                SELECT id, descricao, status FROM ordens_servico 
+                                SELECT id, descricao, status, numero_os_oficial FROM ordens_servico 
                                 WHERE equipamento_id = ? AND status != 'Concluído'
                                 ORDER BY id DESC LIMIT 1
                             """, (equip_id,))
                             ordem_existente = cursor.fetchone()
                             
                             if ordem_existente:
-                                # ATUALIZAR EXISTENTE
-                                id_antigo = ordem_existente[0]
-                                desc_antiga = ordem_existente[1]
+                                # ATUALIZAR
+                                id_antigo, desc_antiga, status_antigo, os_antiga = ordem_existente
                                 
-                                # Se tiver data de encerramento no Excel, FECHA A ORDEM
+                                # Prioridade de Status: Concluído > Parada > Pendente
+                                novo_status = status_antigo
+                                novo_os = os_antiga
+                                
+                                # 1. Se tiver data fim, Conclui
                                 if data_encerramento:
                                     novo_status = "Concluído"
-                                    nova_desc = desc_antiga + f"\n[Fechamento via Excel]: {desc}"
+                                    # Se veio OS nova, atualiza ela também
+                                    if os_oficial: novo_os = os_oficial
                                     
+                                    nova_desc = desc_antiga + f"\n[Fechamento Excel]: {desc}"
                                     conn.execute("""
                                         UPDATE ordens_servico 
-                                        SET descricao=?, horimetro=?, status=?, data_encerramento=?, tipo_operacao_id=?
+                                        SET descricao=?, horimetro=?, status=?, data_encerramento=?, tipo_operacao_id=?, numero_os_oficial=?
                                         WHERE id=?
-                                    """, (nova_desc, horim, novo_status, data_encerramento, op_id, id_antigo))
-                                    atualizados += 1
+                                    """, (nova_desc, horim, novo_status, data_encerramento, op_id, novo_os, id_antigo))
                                     
                                 else:
-                                    # Se não tem data fim, apenas adiciona info
-                                    nova_desc = desc_antiga + f"\n[Atualização via Excel]: {desc}"
-                                    conn.execute("UPDATE ordens_servico SET descricao=?, horimetro=? WHERE id=?", (nova_desc, horim, id_antigo))
-                                    atualizados += 1
+                                    # 2. Se não fecha, verifica PROMOÇÃO
+                                    if os_oficial:
+                                        novo_status = "Aberto (Parada)"
+                                        novo_os = os_oficial
+                                    
+                                    nova_desc = desc_antiga + f"\n[Atualização Excel]: {desc}"
+                                    conn.execute("""
+                                        UPDATE ordens_servico 
+                                        SET descricao=?, horimetro=?, status=?, numero_os_oficial=?
+                                        WHERE id=?
+                                    """, (nova_desc, horim, novo_status, novo_os, id_antigo))
+                                    
+                                atualizados += 1
                                     
                             else:
-                                # CRIAR NOVA (INSERT)
+                                # CRIAR NOVA
                                 status = "Concluído" if data_encerramento else ("Aberto (Parada)" if os_oficial else "Pendente")
                                 conn.execute("""
                                     INSERT INTO ordens_servico 
@@ -359,19 +366,18 @@ with tab_importar:
                             
                         except Exception as e:
                             erros += 1
-                            lista_erros.append(f"Linha {index+2}: Erro interno ({str(e)})")
+                            lista_erros.append(f"Linha {index+2}: {str(e)}")
 
                     conn.commit()
                     conn.close()
                     
-                    # Feedback
-                    if criados > 0 or atualizados > 0:
-                        st.success(f"✅ Processo concluído! {criados} novas, {atualizados} atualizadas/fechadas.")
-                        registrar_log("IMPORTAÇÃO", "Lote Inteligente", f"Novas: {criados}, Atualizadas: {atualizados}")
+                    if sucessos > 0 or atualizados > 0:
+                        st.success(f"✅ Finalizado! {criados} novas, {atualizados} atualizadas.")
+                        registrar_log("IMPORTAÇÃO", "Lote", f"{criados} novos, {atualizados} updates")
                     
                     if erros > 0:
                         st.error(f"❌ {erros} falhas.")
-                        with st.expander("Ver detalhes dos erros"):
+                        with st.expander("Ver erros"):
                             for erro in lista_erros: st.write(f"- {erro}")
 
         except Exception as e:
