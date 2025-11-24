@@ -1,26 +1,27 @@
 import sqlite3
 from datetime import datetime
 import streamlit as st
-import pytz # Importante para corrigir a hora
+import pytz # Biblioteca de fuso horário
 
-# --- Configuração de Fuso Horário ---
-# Garante que os logs fiquem com a hora local do Brasil/MS
+# --- Configuração do Fuso Horário ---
+# Ajustado para Mato Grosso do Sul. Se quiser Brasília, use 'America/Sao_Paulo'
 FUSO_HORARIO = pytz.timezone('America/Campo_Grande')
 
 def registrar_log(acao, alvo, detalhes=""):
     """
-    Grava uma ação no histórico de auditoria com o horário corrigido.
-    
-    Args:
-        acao (str): O tipo de ação (CRIAR, EDITAR, EXCLUIR, LOGIN).
-        alvo (str): O objeto afetado (ex: "OS #100").
-        detalhes (str): Descrição extra (opcional).
+    Grava uma ação no histórico de auditoria com o horário corrigido para o local.
     """
     # Tenta pegar o usuário da sessão, se não tiver, usa 'Sistema'
     usuario = st.session_state.get("user_nome", "Sistema/Anônimo")
     
-    # CORREÇÃO DE HORA: Pega hora local e remove info de timezone para salvar padrão
-    data_hora_local = datetime.now(FUSO_HORARIO).replace(tzinfo=None)
+    # --- CORREÇÃO DE HORA ROBUSTA ---
+    # 1. Pega a hora atual exata em UTC (Tempo Universal)
+    utc_now = datetime.now(pytz.utc)
+    # 2. Converte matematicamente para o fuso horário local
+    local_now = utc_now.astimezone(FUSO_HORARIO)
+    # 3. Remove a informação de fuso para salvar como "data simples" no SQLite
+    # Isso evita confusão na hora de ler
+    data_hora_salvar = local_now.replace(tzinfo=None)
     
     try:
         conn = sqlite3.connect("manutencao.db")
@@ -29,7 +30,7 @@ def registrar_log(acao, alvo, detalhes=""):
         cursor.execute("""
             INSERT INTO audit_logs (data_hora, usuario, acao, alvo, detalhes)
             VALUES (?, ?, ?, ?, ?)
-        """, (data_hora_local, usuario, acao, alvo, detalhes))
+        """, (data_hora_salvar, usuario, acao, alvo, detalhes))
         
         conn.commit()
     except Exception as e:
