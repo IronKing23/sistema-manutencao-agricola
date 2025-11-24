@@ -34,8 +34,7 @@ def garantir_tabela_usuarios():
     conn.close()
 
 # --- Gerenciador de Cookies (CORRIGIDO) ---
-# Removemos o parametro 'experimental_allow_widgets=True' que causava o erro
-@st.cache_resource
+# REMOVIDO O @st.cache_resource POIS CAUSA ERRO DE WIDGET
 def get_manager():
     return stx.CookieManager(key="main_auth_manager")
 
@@ -43,11 +42,11 @@ def get_manager():
 def check_password():
     garantir_tabela_usuarios()
     
-    # Instancia o gerenciador
+    # Instancia o gerenciador (agora sem cache, criado a cada execução)
     try:
         cookie_manager = get_manager()
     except:
-        # Fallback caso o componente falhe na renderização inicial
+        # Fallback de segurança
         return False
 
     time.sleep(0.1)
@@ -184,7 +183,6 @@ def check_password():
                         senha_ok = False
                         if res:
                             senha_banco = res[1]
-                            # Verifica Hash ou Texto Puro (Compatibilidade)
                             if verificar_senha(pw, senha_banco): senha_ok = True
                             elif pw == senha_banco: senha_ok = True
                         
