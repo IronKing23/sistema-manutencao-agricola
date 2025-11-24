@@ -2,14 +2,13 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 
-# OBS: Não importamos mais autenticacao aqui para evitar conflito.
-# O app.py já garantiu o login.
+# OBS: NÃO importe 'autenticacao' aqui. O login já foi feito no app.py.
 
 st.title("🕵️ Logs de Auditoria e Rastreabilidade")
 st.markdown("Histórico completo de ações realizadas no sistema.")
 
 # --- 1. VERIFICAÇÃO DE SEGURANÇA (SOMENTE ADMIN) ---
-# Pegamos o usuário direto da sessão (que o app.py preencheu)
+# Pegamos o usuário direto da sessão (que o app.py já preencheu)
 user_atual = st.session_state.get("username", "")
 
 if user_atual != "admin":
