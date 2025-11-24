@@ -4,7 +4,7 @@ import streamlit as st
 import pytz # Biblioteca de fuso horário
 
 # --- Configuração do Fuso Horário ---
-# Ajustado para Mato Grosso do Sul. Se quiser Brasília, use 'America/Sao_Paulo'
+# Ajustado para Mato Grosso do Sul ('America/Campo_Grande').
 FUSO_HORARIO = pytz.timezone('America/Campo_Grande')
 
 def registrar_log(acao, alvo, detalhes=""):
@@ -14,14 +14,15 @@ def registrar_log(acao, alvo, detalhes=""):
     # Tenta pegar o usuário da sessão, se não tiver, usa 'Sistema'
     usuario = st.session_state.get("user_nome", "Sistema/Anônimo")
     
-    # --- CORREÇÃO DE HORA ROBUSTA ---
-    # 1. Pega a hora atual exata em UTC (Tempo Universal)
-    utc_now = datetime.now(pytz.utc)
-    # 2. Converte matematicamente para o fuso horário local
-    local_now = utc_now.astimezone(FUSO_HORARIO)
-    # 3. Remove a informação de fuso para salvar como "data simples" no SQLite
-    # Isso evita confusão na hora de ler
-    data_hora_salvar = local_now.replace(tzinfo=None)
+    # --- CORREÇÃO DE HORA (A MÁGICA ACONTECE AQUI) ---
+    # 1. Pega o momento atual no fuso correto (MS)
+    agora_local = datetime.now(FUSO_HORARIO)
+    
+    # 2. Remove a "etiqueta" de fuso (.replace(tzinfo=None))
+    # Isso é crucial! O SQLite prefere datas "limpas" (Naive). 
+    # Se salvarmos "14:00-04:00", ele pode confundir na leitura.
+    # Salvando apenas "14:00", garantimos que a visualização será exata.
+    data_hora_salvar = agora_local.replace(tzinfo=None)
     
     try:
         conn = sqlite3.connect("manutencao.db")
