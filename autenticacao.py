@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 import sys
 import os
 
-# Tenta importar utils_senha, se não der, usa fallback simples
+# Tenta importar utils_senha
 try:
     from utils_senha import verificar_senha, hash_senha
 except ImportError:
@@ -33,8 +33,7 @@ def garantir_tabela_usuarios():
         conn.commit()
     conn.close()
 
-# --- Gerenciador de Cookies (CORRIGIDO) ---
-# REMOVIDO O @st.cache_resource POIS CAUSA ERRO DE WIDGET
+# --- Gerenciador de Cookies (Sem cache para evitar erro de widget) ---
 def get_manager():
     return stx.CookieManager(key="main_auth_manager")
 
@@ -42,35 +41,18 @@ def get_manager():
 def check_password():
     garantir_tabela_usuarios()
     
-    # Instancia o gerenciador (agora sem cache, criado a cada execução)
+    # Instancia o gerenciador
     try:
         cookie_manager = get_manager()
     except:
-        # Fallback de segurança
-        return False
+        return False # Fallback
 
     time.sleep(0.1)
-    
-    # 1. LOGOUT
-    if st.session_state.get("logged_in"):
-        with st.sidebar:
-            st.write(f"👤 **{st.session_state.get('user_nome', 'Usuário')}**")
-            
-            if st.button("Sair / Logout"):
-                try: cookie_manager.delete("manutencao_user")
-                except: pass
-                
-                for key in ["logged_in", "user_nome", "username", "force_change", "login_em_processamento"]:
-                    if key in st.session_state: del st.session_state[key]
-                
-                st.session_state["just_logged_out"] = True
-                st.warning("Saindo...")
-                time.sleep(0.5)
-                st.rerun()
-        return True
 
-    # 2. AUTO-LOGIN (COOKIE)
-    if not st.session_state.get("just_logged_out"):
+    # ==========================================================================
+    # 1. TENTATIVA DE AUTO-LOGIN (COOKIE)
+    # ==========================================================================
+    if not st.session_state.get("logged_in") and not st.session_state.get("just_logged_out"):
         try:
             cookies = cookie_manager.get_all()
             cookie_user = cookies.get("manutencao_user") if cookies else None
@@ -93,7 +75,73 @@ def check_password():
     if st.session_state.get("just_logged_out"):
         st.session_state["just_logged_out"] = False
 
+    # ==========================================================================
+    # 2. SE ESTIVER LOGADO (VERIFICAÇÕES)
+    # ==========================================================================
+    if st.session_state.get("logged_in"):
+        
+        # A) PRIMEIRO: Bloqueio de Troca de Senha (A CORREÇÃO ESTÁ AQUI)
+        # Essa verificação agora acontece ANTES de liberar a barra lateral
+        if st.session_state.get("force_change", False):
+            # Esconde sidebar para focar na troca
+            st.markdown("<style>[data-testid='stSidebar'] { display: none; }</style>", unsafe_allow_html=True)
+            
+            st.title("⚠️ Atualização de Segurança Obrigatória")
+            st.markdown("---")
+            
+            col_c, col_bx, col_v = st.columns([1, 2, 1])
+            with col_bx:
+                with st.container(border=True):
+                    st.warning("Este é seu primeiro acesso (ou sua senha foi redefinida). Defina uma nova senha pessoal.")
+                    
+                    with st.form("form_force_change"):
+                        p1 = st.text_input("Nova Senha", type="password")
+                        p2 = st.text_input("Confirmar Nova Senha", type="password")
+                        
+                        if st.form_submit_button("🔒 Atualizar Minha Senha", type="primary"):
+                            if p1 != p2 or not p1:
+                                st.error("Senhas não conferem ou estão vazias.")
+                            else:
+                                try:
+                                    nova_hash = hash_senha(p1)
+                                except:
+                                    nova_hash = p1
+                                    
+                                conn = sqlite3.connect("manutencao.db")
+                                conn.execute("UPDATE usuarios SET password = ?, force_change_password = 0 WHERE username = ?", (nova_hash, st.session_state["username"]))
+                                conn.commit()
+                                conn.close()
+                                
+                                st.session_state["force_change"] = False
+                                st.success("Senha atualizada com sucesso! Acesso liberado.")
+                                time.sleep(1)
+                                st.rerun()
+            
+            return False # BLOQUEIA O RESTO DO APP
+        
+        # B) SEGUNDO: Libera Barra Lateral e Logout (Acesso Normal)
+        with st.sidebar:
+            # Info do Usuário
+            st.write(f"👤 **{st.session_state.get('user_nome', 'Usuário')}**")
+            
+            # Botão Sair
+            if st.button("Sair / Logout"):
+                try: cookie_manager.delete("manutencao_user")
+                except: pass
+                
+                for key in ["logged_in", "user_nome", "username", "force_change", "login_em_processamento"]:
+                    if key in st.session_state: del st.session_state[key]
+                
+                st.session_state["just_logged_out"] = True
+                st.warning("Saindo...")
+                time.sleep(0.5)
+                st.rerun()
+        
+        return True # LIBERA O ACESSO
+
+    # ==========================================================================
     # 3. LOGIN MANUAL (ANIMAÇÃO)
+    # ==========================================================================
     if st.session_state.get("login_em_processamento"):
         st.markdown("""
         <style>
@@ -128,34 +176,9 @@ def check_password():
         st.rerun()
         return True
 
-    # 4. TROCA DE SENHA OBRIGATÓRIA
-    if st.session_state.get("logged_in") and st.session_state.get("force_change", False):
-        st.title("⚠️ Atualização de Segurança")
-        with st.container(border=True):
-            st.warning("Sua senha precisa ser redefinida.")
-            with st.form("form_force_change"):
-                p1 = st.text_input("Nova Senha", type="password")
-                p2 = st.text_input("Confirmar", type="password")
-                if st.form_submit_button("Salvar"):
-                    if p1 != p2 or not p1:
-                        st.error("Senhas inválidas.")
-                    else:
-                        try:
-                            senha_nova_hash = hash_senha(p1)
-                        except:
-                            senha_nova_hash = p1
-                            
-                        conn = sqlite3.connect("manutencao.db")
-                        conn.execute("UPDATE usuarios SET password = ?, force_change_password = 0 WHERE username = ?", (senha_nova_hash, st.session_state["username"]))
-                        conn.commit()
-                        conn.close()
-                        st.session_state["force_change"] = False
-                        st.success("Senha alterada!")
-                        time.sleep(1)
-                        st.rerun()
-        return False
-
-    # 5. TELA DE LOGIN
+    # ==========================================================================
+    # 4. TELA DE LOGIN (FORMULÁRIO)
+    # ==========================================================================
     st.markdown("<style>[data-testid='stSidebar'] { display: none; }</style>", unsafe_allow_html=True)
     st.markdown("<style>.block-container { padding-top: 3rem; }</style>", unsafe_allow_html=True)
 
