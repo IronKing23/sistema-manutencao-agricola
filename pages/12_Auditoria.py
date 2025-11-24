@@ -5,43 +5,47 @@ import sys
 import os
 
 # Import da raiz (para verificar login)
+# Adiciona o diretório pai ao path para importar o autenticacao.py
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import autenticacao
 
 # --- 1. SEGURANÇA ---
-# O app.py já faz o login, mas aqui garantimos que é ADMIN
+# O app.py já faz a verificação básica, mas aqui reforçamos a permissão de ADMIN
+if not autenticacao.check_password():
+    st.stop()
+
 user_atual = st.session_state.get("username", "")
 if user_atual != "admin":
     st.error("⛔ Acesso Restrito: Apenas administradores podem ver os logs de auditoria.")
     st.stop()
 
 st.title("🕵️ Logs de Auditoria e Rastreabilidade")
-st.markdown("Histórico completo de ações realizadas no sistema.")
+st.markdown("Histórico completo de ações realizadas no sistema (Criação, Edição, Exclusão e Login).")
 
 def get_db_connection():
     conn = sqlite3.connect("manutencao.db")
     return conn
 
-# --- 2. FILTROS ---
-with st.expander("🔎 Filtros de Busca", expanded=True):
+# --- 2. FILTROS DE BUSCA ---
+with st.expander("🔎 Filtros de Busca Avançada", expanded=True):
     col1, col2, col3 = st.columns(3)
     
     conn = get_db_connection()
-    # Carrega usuários e ações para o filtro
+    # Carrega listas únicas para os filtros
     try:
-        users_list = pd.read_sql("SELECT DISTINCT usuario FROM audit_logs", conn)['usuario'].tolist()
-        actions_list = pd.read_sql("SELECT DISTINCT acao FROM audit_logs", conn)['acao'].tolist()
+        users_list = pd.read_sql("SELECT DISTINCT usuario FROM audit_logs ORDER BY usuario", conn)['usuario'].tolist()
+        actions_list = pd.read_sql("SELECT DISTINCT acao FROM audit_logs ORDER BY acao", conn)['acao'].tolist()
     except:
         users_list = []
         actions_list = []
     finally:
         conn.close()
         
-    filtro_user = col1.multiselect("Usuário:", options=users_list)
-    filtro_acao = col2.multiselect("Ação:", options=actions_list)
-    filtro_texto = col3.text_input("Buscar em Detalhes (ex: número da OS)")
+    filtro_user = col1.multiselect("Filtrar por Usuário:", options=users_list)
+    filtro_acao = col2.multiselect("Filtrar por Ação:", options=actions_list)
+    filtro_texto = col3.text_input("Buscar em Detalhes (ex: número da OS, placa, frota)")
 
-# --- 3. CONSULTA ---
+# --- 3. CONSULTA AO BANCO ---
 query = "SELECT * FROM audit_logs WHERE 1=1"
 params = []
 
@@ -58,37 +62,43 @@ if filtro_texto:
     term = f"%{filtro_texto}%"
     params.extend([term, term])
 
-query += " ORDER BY data_hora DESC LIMIT 500"
+query += " ORDER BY data_hora DESC LIMIT 1000" # Limite de segurança para não travar
 
 conn = get_db_connection()
-df_logs = pd.read_sql_query(query, conn, params=params)
-conn.close()
+try:
+    df_logs = pd.read_sql_query(query, conn, params=params)
+except Exception as e:
+    st.error(f"Erro ao ler logs: {e}")
+    df_logs = pd.DataFrame()
+finally:
+    conn.close()
 
 # --- 4. VISUALIZAÇÃO ---
 if df_logs.empty:
-    st.info("Nenhum registro encontrado.")
+    st.info("Nenhum registro encontrado com os filtros atuais.")
 else:
-    # --- CORREÇÃO DE LEITURA DE DATA ---
-    # Garante que a leitura seja feita corretamente mesmo com formatos mistos
+    # --- TRATAMENTO DE DATAS ROBUSTO ---
+    # format='mixed' garante que o Pandas leia tanto datas com milissegundos quanto sem
+    # dayfirst=True ajuda a interpretar corretamente dias > 12
     df_logs['data_hora'] = pd.to_datetime(df_logs['data_hora'], format='mixed', dayfirst=True, errors='coerce')
     
-    # Formata para exibição BR (Dia/Mês/Ano Hora:Min)
+    # Formata para exibição brasileira (Dia/Mês/Ano Hora:Min:Seg)
     df_logs['data_formatada'] = df_logs['data_hora'].dt.strftime('%d/%m/%Y %H:%M:%S').fillna("-")
     
-    # Tabela interativa
+    # Exibição da Tabela
     st.dataframe(
         df_logs,
         use_container_width=True,
         hide_index=True,
         column_config={
-            "id": st.column_config.NumberColumn("ID", width="small"),
+            "id": st.column_config.NumberColumn("ID Log", width="small"),
             "data_formatada": st.column_config.TextColumn("Data/Hora", width="medium"),
-            "usuario": st.column_config.TextColumn("Autor", width="medium"),
-            "acao": st.column_config.TextColumn("Ação", width="small"),
-            "alvo": st.column_config.TextColumn("Alvo", width="medium"),
-            "detalhes": st.column_config.TextColumn("Detalhes", width="large"),
-            "data_hora": None # Esconde a coluna original de data (usa a formatada)
+            "usuario": st.column_config.TextColumn("Autor da Ação", width="medium"),
+            "acao": st.column_config.TextColumn("Tipo de Ação", width="small"),
+            "alvo": st.column_config.TextColumn("Alvo (ID)", width="medium"),
+            "detalhes": st.column_config.TextColumn("Detalhes da Operação", width="large"),
+            "data_hora": None # Oculta a coluna original de data
         }
     )
     
-    st.caption(f"Mostrando os últimos {len(df_logs)} registros.")
+    st.caption(f"Mostrando os últimos {len(df_logs)} registros encontrados.")
