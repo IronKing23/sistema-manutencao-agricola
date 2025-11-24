@@ -9,7 +9,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import autenticacao
 
 # --- 1. SEGURANÇA ---
-# O app.py já faz o login, mas aqui precisamos garantir que é ADMIN
+# O app.py já faz o login, mas aqui garantimos que é ADMIN
 user_atual = st.session_state.get("username", "")
 if user_atual != "admin":
     st.error("⛔ Acesso Restrito: Apenas administradores podem ver os logs de auditoria.")
@@ -27,7 +27,7 @@ with st.expander("🔎 Filtros de Busca", expanded=True):
     col1, col2, col3 = st.columns(3)
     
     conn = get_db_connection()
-    # Carrega usuários únicos que fizeram ações
+    # Carrega usuários e ações para o filtro
     try:
         users_list = pd.read_sql("SELECT DISTINCT usuario FROM audit_logs", conn)['usuario'].tolist()
         actions_list = pd.read_sql("SELECT DISTINCT acao FROM audit_logs", conn)['acao'].tolist()
@@ -58,7 +58,7 @@ if filtro_texto:
     term = f"%{filtro_texto}%"
     params.extend([term, term])
 
-query += " ORDER BY data_hora DESC LIMIT 500" # Limite de segurança
+query += " ORDER BY data_hora DESC LIMIT 500"
 
 conn = get_db_connection()
 df_logs = pd.read_sql_query(query, conn, params=params)
@@ -68,28 +68,26 @@ conn.close()
 if df_logs.empty:
     st.info("Nenhum registro encontrado.")
 else:
-    # Formata data
-    df_logs['data_hora'] = pd.to_datetime(df_logs['data_hora']).dt.strftime('%d/%m/%Y %H:%M:%S')
+    # --- CORREÇÃO DE LEITURA DE DATA ---
+    # Garante que a leitura seja feita corretamente mesmo com formatos mistos
+    df_logs['data_hora'] = pd.to_datetime(df_logs['data_hora'], format='mixed', dayfirst=True, errors='coerce')
     
-    # Tabela com cores baseadas na ação
-    def highlight_action(val):
-        color = 'white'
-        if val == 'EXCLUIR': color = '#FFCDD2' # Vermelho claro
-        elif val == 'CRIAR': color = '#C8E6C9' # Verde claro
-        elif val == 'EDITAR': color = '#FFF9C4' # Amarelo claro
-        return f'background-color: {color}; color: black'
-
+    # Formata para exibição BR (Dia/Mês/Ano Hora:Min)
+    df_logs['data_formatada'] = df_logs['data_hora'].dt.strftime('%d/%m/%Y %H:%M:%S').fillna("-")
+    
+    # Tabela interativa
     st.dataframe(
         df_logs,
         use_container_width=True,
         hide_index=True,
         column_config={
             "id": st.column_config.NumberColumn("ID", width="small"),
-            "data_hora": st.column_config.TextColumn("Data/Hora", width="medium"),
+            "data_formatada": st.column_config.TextColumn("Data/Hora", width="medium"),
             "usuario": st.column_config.TextColumn("Autor", width="medium"),
             "acao": st.column_config.TextColumn("Ação", width="small"),
             "alvo": st.column_config.TextColumn("Alvo", width="medium"),
             "detalhes": st.column_config.TextColumn("Detalhes", width="large"),
+            "data_hora": None # Esconde a coluna original de data (usa a formatada)
         }
     )
     
