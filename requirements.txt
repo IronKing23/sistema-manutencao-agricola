@@ -1,0 +1,39 @@
+streamlit
+pandas
+plotly
+fpdf2
+folium
+streamlit-folium
+extra-streamlit-components
+bcrypt
+openpyxl
+
+#pip install streamlit pandas plotly fpdf2 folium streamlit-folium extra-streamlit-components bcrypt openpyxlpip install streamlit pandas plotly fpdf2 folium streamlit-folium extra-streamlit-components bcrypt openpyxl
+
+
+#📦 Lista de Bibliotecas Utilizadas
+#streamlit: A base do nosso aplicativo web.
+
+#pandas: Para manipulação de tabelas de dados e leitura de Excel.
+
+#plotly: Para criar os gráficos interativos e bonitos.
+
+#fpdf2: Para gerar os relatórios em PDF (A4 Paisagem e Retrato).
+
+#folium: Para criar o mapa de satélite.
+
+#streamlit-folium: Para exibir o mapa dentro do sistema.
+#extra-streamlit-components: Para gerenciar os Cookies (Login persistente).
+
+#bcrypt: Para criptografar as senhas e garantir segurança.
+
+#openpyxl: Para que o Pandas consiga ler arquivos .xlsx (Excel) na importação em lote.
+
+#Nota: As bibliotecas sqlite3, datetime, time, sys, os e urllib já vêm instaladas com o Python por padrão, então não precisa instalar.
+
+#🚀 Comando Único para Instalação (Terminal)
+#Você pode copiar e colar essa linha inteira no seu terminal para instalar tudo de uma vez:
+
+#Bash
+
+#pip install streamlit pandas plotly fpdf2 folium streamlit-folium extra-streamlit-components bcrypt openpyxl
