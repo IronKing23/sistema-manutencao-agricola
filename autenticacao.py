@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 import sys
 import os
 
-# Importa utilitário de senha
+# Tenta importar utils_senha, se não der, usa fallback simples
 try:
     from utils_senha import verificar_senha, hash_senha
 except ImportError:
@@ -27,60 +27,52 @@ def garantir_tabela_usuarios():
     """)
     cursor.execute("SELECT * FROM usuarios WHERE username = 'admin'")
     if not cursor.fetchone():
-        try:
-            pass_hash = hash_senha('1234')
-        except:
-            pass_hash = '1234'
+        try: pass_hash = hash_senha('1234')
+        except: pass_hash = '1234'
         cursor.execute("INSERT INTO usuarios VALUES ('admin', ?, 'Administrador Geral', 0)", (pass_hash,))
         conn.commit()
     conn.close()
 
-# --- Gerenciador de Cookies ---
-# CORREÇÃO: Usamos @st.cache_resource para garantir que o manager seja ÚNICO na sessão
-# e removemos a chave fixa que estava causando colisão ou usamos uma chave segura.
-# Vamos usar o cache_resource que é o jeito correto de instanciar singletons no Streamlit novo.
-@st.cache_resource(experimental_allow_widgets=True) 
+# --- Gerenciador de Cookies (CORRIGIDO) ---
+# Removemos o parametro 'experimental_allow_widgets=True' que causava o erro
+@st.cache_resource
 def get_manager():
-    return stx.CookieManager()
+    return stx.CookieManager(key="main_auth_manager")
 
 # --- FUNÇÃO PRINCIPAL ---
 def check_password():
     garantir_tabela_usuarios()
     
-    # Instancia o gerenciador (agora cacheado, então sempre retorna o mesmo objeto)
-    cookie_manager = get_manager()
-    
-    # Delay técnico
+    # Instancia o gerenciador
+    try:
+        cookie_manager = get_manager()
+    except:
+        # Fallback caso o componente falhe na renderização inicial
+        return False
+
     time.sleep(0.1)
     
-    # ==========================================================================
-    # 1. LOGOUT (SAIR)
-    # ==========================================================================
+    # 1. LOGOUT
     if st.session_state.get("logged_in"):
         with st.sidebar:
             st.write(f"👤 **{st.session_state.get('user_nome', 'Usuário')}**")
             
             if st.button("Sair / Logout"):
-                try:
-                    cookie_manager.delete("manutencao_user")
+                try: cookie_manager.delete("manutencao_user")
                 except: pass
                 
                 for key in ["logged_in", "user_nome", "username", "force_change", "login_em_processamento"]:
                     if key in st.session_state: del st.session_state[key]
                 
                 st.session_state["just_logged_out"] = True
-                
                 st.warning("Saindo...")
                 time.sleep(0.5)
                 st.rerun()
         return True
 
-    # ==========================================================================
     # 2. AUTO-LOGIN (COOKIE)
-    # ==========================================================================
     if not st.session_state.get("just_logged_out"):
         try:
-            # Pega todos os cookies
             cookies = cookie_manager.get_all()
             cookie_user = cookies.get("manutencao_user") if cookies else None
             
@@ -102,9 +94,7 @@ def check_password():
     if st.session_state.get("just_logged_out"):
         st.session_state["just_logged_out"] = False
 
-    # ==========================================================================
-    # 3. ANIMAÇÃO DE CARREGAMENTO
-    # ==========================================================================
+    # 3. LOGIN MANUAL (ANIMAÇÃO)
     if st.session_state.get("login_em_processamento"):
         st.markdown("""
         <style>
@@ -139,9 +129,7 @@ def check_password():
         st.rerun()
         return True
 
-    # ==========================================================================
-    # 4. TROCA DE SENHA
-    # ==========================================================================
+    # 4. TROCA DE SENHA OBRIGATÓRIA
     if st.session_state.get("logged_in") and st.session_state.get("force_change", False):
         st.title("⚠️ Atualização de Segurança")
         with st.container(border=True):
@@ -168,9 +156,7 @@ def check_password():
                         st.rerun()
         return False
 
-    # ==========================================================================
     # 5. TELA DE LOGIN
-    # ==========================================================================
     st.markdown("<style>[data-testid='stSidebar'] { display: none; }</style>", unsafe_allow_html=True)
     st.markdown("<style>.block-container { padding-top: 3rem; }</style>", unsafe_allow_html=True)
 
@@ -198,10 +184,9 @@ def check_password():
                         senha_ok = False
                         if res:
                             senha_banco = res[1]
-                            if verificar_senha(pw, senha_banco):
-                                senha_ok = True
-                            elif pw == senha_banco:
-                                senha_ok = True
+                            # Verifica Hash ou Texto Puro (Compatibilidade)
+                            if verificar_senha(pw, senha_banco): senha_ok = True
+                            elif pw == senha_banco: senha_ok = True
                         
                         if senha_ok:
                             st.session_state["login_em_processamento"] = True
