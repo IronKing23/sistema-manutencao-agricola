@@ -1,28 +1,51 @@
 import sqlite3
 from datetime import datetime
 import streamlit as st
-import pytz # Biblioteca de fuso horário
+import pytz
 
 # --- Configuração do Fuso Horário ---
-# Ajustado para Mato Grosso do Sul ('America/Campo_Grande').
 FUSO_HORARIO = pytz.timezone('America/Campo_Grande')
+
+def garantir_tabela_logs():
+    """Cria a tabela de logs se ela não existir."""
+    conn = sqlite3.connect("manutencao.db")
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS audit_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                data_hora DATETIME,
+                usuario TEXT,
+                acao TEXT,
+                alvo TEXT,
+                detalhes TEXT
+            )
+        """)
+        conn.commit()
+    except Exception as e:
+        print(f"Erro ao criar tabela de logs: {e}")
+    finally:
+        conn.close()
 
 def registrar_log(acao, alvo, detalhes=""):
     """
-    Grava uma ação no histórico de auditoria com o horário corrigido para o local.
+    Grava uma ação no histórico de auditoria com o horário corrigido.
+    Cria a tabela automaticamente se necessário.
     """
-    # Tenta pegar o usuário da sessão, se não tiver, usa 'Sistema'
+    # 1. Garante que a tabela existe antes de gravar
+    garantir_tabela_logs()
+    
+    # 2. Identifica o usuário
     usuario = st.session_state.get("user_nome", "Sistema/Anônimo")
     
-    # --- CORREÇÃO DE HORA (A MÁGICA ACONTECE AQUI) ---
-    # 1. Pega o momento atual no fuso correto (MS)
-    agora_local = datetime.now(FUSO_HORARIO)
-    
-    # 2. Remove a "etiqueta" de fuso (.replace(tzinfo=None))
-    # Isso é crucial! O SQLite prefere datas "limpas" (Naive). 
-    # Se salvarmos "14:00-04:00", ele pode confundir na leitura.
-    # Salvando apenas "14:00", garantimos que a visualização será exata.
-    data_hora_salvar = agora_local.replace(tzinfo=None)
+    # 3. Ajusta a hora (UTC -> Local -> Naive)
+    try:
+        utc_now = datetime.now(pytz.utc)
+        local_now = utc_now.astimezone(FUSO_HORARIO)
+        data_hora_salvar = local_now.replace(tzinfo=None)
+    except:
+        # Fallback se der erro de fuso
+        data_hora_salvar = datetime.now()
     
     try:
         conn = sqlite3.connect("manutencao.db")
@@ -35,6 +58,7 @@ def registrar_log(acao, alvo, detalhes=""):
         
         conn.commit()
     except Exception as e:
-        print(f"Erro ao gravar log: {e}")
+        # Mostra erro no terminal/console para debug
+        print(f"ERRO AO GRAVAR LOG: {e}")
     finally:
         conn.close()
