@@ -318,7 +318,7 @@ def check_password():
                     
                     if manter:
                         try:
-                            # CORREÇÃO AQUI: Usando datetime para garantir compatibilidade
+                            # CORREÇÃO AQUI: Garantindo data válida para o cookie
                             expires_at = datetime.now() + timedelta(days=30)
                             cookie_manager.set("manutencao_user", user, expires_at=expires_at)
                         except Exception as e:
