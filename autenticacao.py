@@ -85,15 +85,20 @@ def check_password():
     if st.session_state.get("logged_in"):
         if st.sidebar.button("Sair / Logout", key="logout_btn_sidebar"):
             # 1. Força a exclusão do cookie definindo ele como None ou deletando
-            cookie_manager.delete("manutencao_user")
+            try:
+                cookie_manager.delete("manutencao_user")
+            except: pass
             
-            # 2. Limpa a sessão
+            # 2. Limpa a sessão da memória
             for key in ["logged_in", "user_nome", "username", "force_change"]:
                 if key in st.session_state: del st.session_state[key]
             
-            # 3. Feedback visual e espera antes do reload
-            st.toast("Sessão encerrada. Até logo!", icon="👋")
-            time.sleep(2) # Dá tempo pro navegador apagar o cookie antes do reload
+            # 3. Feedback visual e espera antes do reload (CRUCIAL)
+            placeholder = st.empty()
+            with placeholder.container():
+                st.toast("Sessão encerrada. Até logo!", icon="👋")
+                time.sleep(2.0) # Dá tempo pro navegador processar a exclusão do cookie
+            
             st.rerun()
 
     # ==========================================================================
@@ -128,7 +133,7 @@ def check_password():
         return True
 
     # ==========================================================================
-    # 4. TELA DE LOGIN (VISUAL CORRIGIDO + ANIMAÇÃO)
+    # 4. TELA DE LOGIN (VISUAL CORRIGIDO + ANIMAÇÃO FULLSCREEN)
     # ==========================================================================
     # Se chegou aqui, é porque não tem cookie nem sessão -> Mostra Login
     st.markdown("<style>[data-testid='stSidebar'] { display: none; }</style>", unsafe_allow_html=True)
@@ -137,7 +142,7 @@ def check_password():
     <style>
     .block-container { padding-top: 5rem; }
     
-    /* Remove borda do form */
+    /* Remove borda e fundo do formulário para ele se fundir ao container */
     [data-testid="stForm"] {
         border: none;
         padding: 0;
@@ -145,59 +150,124 @@ def check_password():
         background-color: transparent;
     }
     
-    /* Animações */
+    /* Animações Básicas */
     @keyframes bounce-tractor {
         0%, 20%, 50%, 80%, 100% {transform: translateY(0);}
         40% {transform: translateY(-10px);}
         60% {transform: translateY(-5px);}
     }
-    .anim-tractor { display: inline-block; animation: bounce-tractor 2.5s infinite; line-height: 1; }
+    .anim-tractor {
+        display: inline-block;
+        animation: bounce-tractor 2.5s infinite;
+        line-height: 1;
+    }
 
-    @keyframes spin-gear { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-    .anim-gear { display: inline-block; animation: spin-gear 12s linear infinite; transform-origin: center; cursor: help; line-height: 1; }
-    .anim-gear:hover { animation: spin-gear 2s linear infinite; }
+    @keyframes spin-gear {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
+    .anim-gear {
+        display: inline-block;
+        animation: spin-gear 12s linear infinite;
+        transform-origin: center;
+        cursor: help;
+        line-height: 1;
+    }
+    .anim-gear:hover {
+        animation: spin-gear 2s linear infinite;
+    }
     
-    .login-title { font-family: 'Helvetica', sans-serif; font-weight: 800; font-size: 26px; color: #2E7D32; line-height: 1.1; }
+    /* Título */
+    .login-title {
+        font-family: 'Helvetica', sans-serif;
+        font-weight: 800; 
+        font-size: 26px; 
+        color: #2E7D32; 
+        line-height: 1.1;
+    }
     
-    /* Loading Screen */
+    /* --- TELA DE CARREGAMENTO (FULLSCREEN) --- */
     #loading-screen {
-        position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-        background-color: #0e1117; z-index: 99999;
-        display: flex; flex-direction: column; align-items: center; justify-content: center;
-        color: white; font-family: 'Helvetica', sans-serif;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        background-color: #0e1117; /* Cor de fundo escura moderna */
+        z-index: 99999;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-family: 'Helvetica', sans-serif;
     }
-    .loader-content { text-align: center; animation: fadeIn 0.5s ease-in; }
+    
+    .loader-content {
+        text-align: center;
+        animation: fadeIn 0.5s ease-in;
+    }
+    
     @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    
     .progress-container {
-        width: 300px; height: 6px; background-color: #333; border-radius: 10px;
-        margin-top: 20px; overflow: hidden; position: relative;
+        width: 300px;
+        height: 6px;
+        background-color: #333;
+        border-radius: 10px;
+        margin-top: 20px;
+        overflow: hidden;
+        position: relative;
     }
+    
     .progress-bar {
-        height: 100%; background-color: #2E7D32; width: 0%;
-        animation: load 2.5s ease-out forwards; border-radius: 10px;
+        height: 100%;
+        background-color: #2E7D32; /* Verde do sistema */
+        width: 0%;
+        animation: load 2.5s ease-out forwards;
+        border-radius: 10px;
     }
-    @keyframes load { 0% { width: 0%; } 50% { width: 60%; } 100% { width: 100%; } }
-    .jumping-tractor { font-size: 80px; animation: bounce-tractor 1s infinite; margin-bottom: 10px; }
+    
+    @keyframes load {
+        0% { width: 0%; }
+        50% { width: 60%; }
+        100% { width: 100%; }
+    }
+    
+    .jumping-tractor {
+        font-size: 80px;
+        animation: bounce-tractor 1s infinite;
+        margin-bottom: 10px;
+    }
     </style>
     """, unsafe_allow_html=True)
 
     c1, c2, c3 = st.columns([1, 1.2, 1])
+    
+    # Container da tela de login
     login_container = c2.container(border=True)
     
     with login_container:
+        
+        # --- CABEÇALHO ---
         st.markdown("""
         <div style="display: flex; align-items: center; justify-content: center; margin-top: 20px; margin-bottom: 20px;">
             <div style="display: flex; align-items: center; gap: 15px;">
                 <div class="anim-tractor" style="font-size: 48px;">🚜</div>
-                <div class="login-title">Controle<br>Agrícola</div>
+                <div class="login-title">
+                    Controle<br>Agrícola
+                </div>
             </div>
-            <div class="anim-gear" style="font-size: 36px; color: #2E7D32; margin-left: 20px;">⚙️</div>
+            <div class="anim-gear" style="font-size: 36px; color: #2E7D32; margin-left: 20px;">
+                ⚙️
+            </div>
         </div>
         <p style="text-align: center; color: #6c757d; font-size: 0.9rem; margin-bottom: 20px;">
             Bem-vindo! Insira suas credenciais.
         </p>
         """, unsafe_allow_html=True)
         
+        # --- FORMULÁRIO ---
         with st.form("login_form"):
             user = st.text_input("Usuário", placeholder="Digite seu usuário...")
             pw = st.text_input("Senha", type="password", placeholder="••••••••")
@@ -221,36 +291,37 @@ def check_password():
                     elif pw == res[1]: senha_ok = True
                 
                 if senha_ok:
-                    # --- SUCESSO: GRAVA COOKIE ---
-                    if manter:
-                        try:
-                            # Usando datetime simples para compatibilidade
-                            expires_at = datetime.now() + timedelta(days=30)
-                            cookie_manager.set("manutencao_user", user, expires_at=expires_at)
-                        except Exception as e:
-                            print(f"Erro ao gravar cookie: {e}")
-
-                    # --- ANIMAÇÃO DE LOADING ---
-                    login_container.empty()
-                    with login_container:
-                        st.markdown("<br><br>", unsafe_allow_html=True)
-                        st.markdown("""
-                        <div id="loading-screen">
-                            <div class="loader-content">
-                                <div class="jumping-tractor">🚜</div>
-                                <h2 style="color: #2E7D32; margin-bottom: 5px;">Iniciando Sistema...</h2>
-                                <p style="color: #888; font-size: 14px;">Carregando módulos e dados...</p>
-                                <div class="progress-container"><div class="progress-bar"></div></div>
+                    # --- ANIMAÇÃO FULLSCREEN ---
+                    # Injeta o HTML de overlay que cobre a tela inteira
+                    st.markdown("""
+                    <div id="loading-screen">
+                        <div class="loader-content">
+                            <div class="jumping-tractor">🚜</div>
+                            <h2 style="color: #2E7D32; margin-bottom: 5px;">Iniciando Sistema...</h2>
+                            <p style="color: #888; font-size: 14px;">Carregando módulos e dados...</p>
+                            <div class="progress-container">
+                                <div class="progress-bar"></div>
                             </div>
                         </div>
-                        """, unsafe_allow_html=True)
-                        time.sleep(2.2) 
+                    </div>
+                    """, unsafe_allow_html=True)
                     
-                    # Define Sessão RAM
+                    # Simula tempo para a barra encher visualmente
+                    time.sleep(2.2) 
+                    
+                    # Registra Sessão
                     st.session_state["logged_in"] = True
                     st.session_state["username"] = user
                     st.session_state["user_nome"] = res[0]
                     st.session_state["force_change"] = (res[2] == 1)
+                    
+                    if manter:
+                        try:
+                            # CORREÇÃO AQUI: Garantindo data válida para o cookie
+                            expires_at = datetime.now() + timedelta(days=30)
+                            cookie_manager.set("manutencao_user", user, expires_at=expires_at)
+                        except Exception as e:
+                            print(f"Erro cookie: {e}")
                     
                     st.rerun()
                 else:
