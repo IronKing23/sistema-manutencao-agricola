@@ -307,3 +307,128 @@ def gerar_prontuario_maquina(frota_nome, df_historico, kpis):
         pdf.set_xy(10, y + h) # Próxima linha
 
     return bytes(pdf.output(dest='S'))
+
+# --- 4. Relatório de KPIs (MTBF/MTTR) ---
+def gerar_relatorio_kpi(kpis, df_falhas, filtros_texto):
+    pdf = PDF()
+    pdf.add_page()
+    
+    # --- CABEÇALHO ---
+    pdf.set_font('Helvetica', 'B', 16)
+    pdf.cell(0, 10, "RELATÓRIO DE PERFORMANCE (MTBF & MTTR)", 0, 1, 'C')
+    
+    pdf.set_font('Helvetica', '', 10)
+    pdf.cell(0, 6, f"Gerado em: {datetime.now().strftime('%d/%m/%Y %H:%M')}", 0, 1, 'C')
+    
+    pdf.set_font('Helvetica', 'I', 8)
+    pdf.multi_cell(0, 5, f"Filtros Aplicados: {filtros_texto}", 0, 'C')
+    pdf.ln(5)
+
+    # --- QUADRO DE INDICADORES (GRID 2x2) ---
+    pdf.set_fill_color(240, 248, 255) # Azul clarinho
+    y_start = pdf.get_y()
+    
+    # Desenha o fundo do quadro
+    pdf.rect(10, y_start, 190, 30, 'F')
+    
+    # Configurações das células
+    w_col = 190 / 4
+    h_row = 15
+    
+    def desenhar_kpi(titulo, valor, x, y, destaque=False):
+        pdf.set_xy(x, y)
+        pdf.set_font('Helvetica', '', 9)
+        pdf.set_text_color(100, 100, 100)
+        pdf.cell(w_col, 6, titulo, 0, 2, 'C')
+        
+        pdf.set_font('Helvetica', 'B', 14)
+        if destaque: pdf.set_text_color(200, 0, 0) # Vermelho para destaque negativo
+        else: pdf.set_text_color(0, 0, 0)
+        pdf.cell(w_col, 8, str(valor), 0, 0, 'C')
+
+    # Linha única com 4 colunas
+    desenhar_kpi("MTBF (Confiabilidade)", kpis['mtbf'], 10, y_start+8)
+    desenhar_kpi("MTTR (Eficiência)", kpis['mttr'], 10 + w_col, y_start+8)
+    desenhar_kpi("DISPONIBILIDADE", kpis['disp'], 10 + w_col*2, y_start+8)
+    desenhar_kpi("TOTAL DE FALHAS", kpis['falhas'], 10 + w_col*3, y_start+8)
+
+    pdf.ln(35)
+
+    # --- TOP MAQUINAS QUEBRADAS (Simulação de Gráfico) ---
+    if not df_falhas.empty:
+        pdf.set_font('Helvetica', 'B', 12)
+        pdf.cell(0, 8, "TOP 5 - MÁQUINAS COM MAIS FALHAS", 0, 1, 'L')
+        
+        contagem = df_falhas['frota'].astype(str).value_counts().head(5)
+        max_val = contagem.max()
+        bar_h = 6
+        start_x = 40
+        max_bar_w = 130
+        
+        pdf.set_font('Helvetica', '', 9)
+        pdf.set_text_color(0)
+        
+        for frota, qtd in contagem.items():
+            pdf.set_xy(10, pdf.get_y())
+            pdf.cell(30, bar_h, frota[:15], 0, 0, 'R')
+            
+            largura = (qtd / max_val) * max_bar_w if max_val > 0 else 0
+            
+            # Cor vermelha suave para as barras
+            pdf.set_fill_color(231, 76, 60)
+            pdf.rect(start_x, pdf.get_y()+1, largura, bar_h-2, 'F')
+            
+            pdf.set_xy(start_x + largura + 2, pdf.get_y())
+            pdf.cell(10, bar_h, str(qtd), 0, 1)
+        
+        pdf.ln(8)
+
+    # --- TABELA DE DADOS ---
+    pdf.set_font('Helvetica', 'B', 12)
+    pdf.cell(0, 8, "REGISTRO DETALHADO DE FALHAS", 0, 1, 'L')
+    
+    # Cabeçalho da Tabela
+    cols = [("Data", 25), ("Frota", 25), ("Modelo", 35), ("Duração", 20), ("Tipo", 30), ("Causa/Desc.", 55)]
+    pdf.set_fill_color(50, 50, 50); pdf.set_text_color(255); pdf.set_font('Helvetica', 'B', 8)
+    for n, w in cols: pdf.cell(w, 7, n, 1, 0, 'C', True)
+    pdf.ln(); pdf.set_text_color(0); pdf.set_font('Helvetica', '', 8)
+    
+    # Linhas
+    for _, row in df_falhas.iterrows():
+        # Zebrado ou cor por tipo (opcional, aqui usando cor simples alternada ou branca)
+        rgb_cor = obter_cor_linha(row) # Usa a mesma lógica de cores do sistema
+        pdf.set_fill_color(*rgb_cor)
+
+        desc = str(row.get('classificacao', '')) + ": " + str(row.get('tipo_servico', ''))
+        # Calcula altura baseada no tamanho do modelo (que pode ser grande)
+        modelo_str = str(row.get('modelo', ''))
+        
+        h = 7
+        
+        # Verifica quebra de página
+        if pdf.get_y() + h > 270:
+            pdf.add_page()
+            pdf.set_fill_color(50, 50, 50); pdf.set_text_color(255); pdf.set_font('Helvetica', 'B', 8)
+            for n, w in cols: pdf.cell(w, 7, n, 1, 0, 'C', True)
+            pdf.ln(); pdf.set_text_color(0); pdf.set_font('Helvetica', '', 8)
+            pdf.set_fill_color(*rgb_cor)
+
+        # Dados Formatados
+        dt = formatar_data_segura(row.get('abertura')).split(' ')[0]
+        duracao = f"{row.get('duracao_horas', 0):.1f} h"
+        
+        x = pdf.get_x(); y = pdf.get_y()
+        
+        pdf.cell(25, h, dt, 1, 0, 'C', True)
+        pdf.cell(25, h, str(row.get('frota', '')), 1, 0, 'C', True)
+        
+        # Modelo (Trunca se for muito grande)
+        pdf.cell(35, h, modelo_str[:18], 1, 0, 'L', True)
+        
+        pdf.cell(20, h, duracao, 1, 0, 'C', True)
+        pdf.cell(30, h, str(row.get('tipo_servico', ''))[:15], 1, 0, 'C', True)
+        pdf.cell(55, h, str(row.get('classificacao', '')), 1, 0, 'L', True) # Usando classificação como desc
+        
+        pdf.ln()
+
+    return bytes(pdf.output(dest='S'))

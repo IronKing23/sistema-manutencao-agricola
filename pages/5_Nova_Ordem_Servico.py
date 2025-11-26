@@ -94,7 +94,7 @@ except Exception as e:
 tab_manual, tab_importar = st.tabs(["📝 Abertura Manual", "📂 Importação em Lote (Histórico/Excel)"])
 
 # ==============================================================================
-# ABA 1: MANUAL
+# ABA 1: MANUAL (ATUALIZADA PARA KPI)
 # ==============================================================================
 with tab_manual:
     st.subheader("Detalhes do Atendimento")
@@ -139,13 +139,34 @@ with tab_manual:
         with col5: funcionario_display = st.selectbox("Executante", options=funcionarios_df['display'], index=None)
         with col6: prioridade = st.selectbox("Prioridade", options=["🔴 Alta (Urgente)", "🟡 Média (Normal)", "🔵 Baixa"], index=1)
 
-        descricao = st.text_area("Descrição*", placeholder="Detalhes...")
+        # --- NOVOS CAMPOS PARA KPI (MTBF/MTTR) ---
+        st.markdown("---")
+        st.markdown("###### 🔧 Dados para Indicadores (KPI)")
+        c_class1, c_class2 = st.columns(2)
+
+        with c_class1:
+            classificacao = st.radio(
+                "Tipo de Intervenção", 
+                options=["Corretiva (Quebra)", "Preventiva (Planejada)", "Preditiva / Melhoria"],
+                horizontal=True,
+                help="Corretiva: conta como falha. Preventiva: manutenção programada."
+            )
+
+        with c_class2:
+            # Se a classificação lá em cima for "Parada", já sugerimos True aqui
+            parada_default = True if "Parada" in tipo_atendimento else False
+            maquina_parada = st.checkbox("A máquina ficou PARADA?", value=parada_default, help="Marque se a máquina não pôde trabalhar durante o problema.")
+        
+        st.markdown("---")
+        # -----------------------------------------
+
+        descricao = st.text_area("Descrição*", placeholder="Detalhes do problema...")
         
         num_os_oficial = None
         status_inicial = "Pendente"
 
         if "Parada" in tipo_atendimento:
-            st.markdown("---"); st.error("🔴 **Dados Obrigatórios para Parada**")
+            st.error("🔴 **Dados Obrigatórios para Parada**")
             c_os, c_st = st.columns(2)
             with c_os: 
                 input_os = st.text_input("Número da OS Oficial")
@@ -175,14 +196,19 @@ with tab_manual:
                 val_lat = lat if lat != 0.0 else None; val_lon = lon if lon != 0.0 else None
                 data_hora_atual = datetime.now(FUSO_HORARIO).replace(tzinfo=None)
                 
+                # Tratamento dos Novos Campos KPI
+                tipo_classificacao = classificacao.split(" ")[0] # Pega só "Corretiva", "Preventiva"
+                flag_parada = 1 if maquina_parada else 0
+
                 ordem_existente = obter_ordem_aberta(int(equipamento_id))
                 conn = get_db_connection()
                 cursor = conn.cursor()
 
                 if ordem_existente:
+                    # UPDATE (Unificação)
                     id_antigo, desc_antiga, status_antigo, os_antiga = ordem_existente
                     
-                    nova_nota = f"\n\n--- [Add em {data_hora_atual.strftime('%d/%m %H:%M')}] ---\nTipo: {operacao_display} | Prio: {prioridade_clean}\nDesc: {descricao}"
+                    nova_nota = f"\n\n--- [Add em {data_hora_atual.strftime('%d/%m %H:%M')}] ---\nTipo: {operacao_display} | Prio: {prioridade_clean} | Classe: {tipo_classificacao}\nDesc: {descricao}"
                     descricao_final = desc_antiga + nova_nota
                     
                     status_final = status_antigo
@@ -201,14 +227,25 @@ with tab_manual:
                     registrar_log("EDITAR (FUSÃO)", f"OS #{id_antigo}", "Atualização manual")
                     st.success(f"🔄 Unificado no Ticket #{id_antigo}!")
                 else:
+                    # INSERT (Nova Ordem com Campos KPI)
                     cursor.execute("""
-                        INSERT INTO ordens_servico (data_hora, equipamento_id, local_atendimento, descricao, tipo_operacao_id, status, numero_os_oficial, funcionario_id, horimetro, prioridade, latitude, longitude)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (data_hora_atual, int(equipamento_id), local_atendimento, descricao, int(tipo_operacao_id), status_inicial, num_os_oficial, func_id, horimetro, prioridade_clean, val_lat, val_lon))
+                        INSERT INTO ordens_servico (
+                            data_hora, equipamento_id, local_atendimento, descricao, 
+                            tipo_operacao_id, status, numero_os_oficial, funcionario_id, 
+                            horimetro, prioridade, latitude, longitude,
+                            classificacao, maquina_parada
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        data_hora_atual, int(equipamento_id), local_atendimento, descricao, 
+                        int(tipo_operacao_id), status_inicial, num_os_oficial, func_id, 
+                        horimetro, prioridade_clean, val_lat, val_lon,
+                        tipo_classificacao, flag_parada
+                    ))
                     
                     tid = cursor.lastrowid; conn.commit()
-                    registrar_log("CRIAR", f"OS #{tid}", f"Frota: {frota_display}")
-                    st.success(f"✅ Ticket #{tid} criado!")
+                    registrar_log("CRIAR", f"OS #{tid}", f"Frota: {frota_display} | {tipo_classificacao}")
+                    st.success(f"✅ Ticket #{tid} criado com sucesso!")
                 
             except Exception as e:
                 st.error(f"Erro: {e}")
@@ -217,7 +254,7 @@ with tab_manual:
                     conn.close()
 
 # ==============================================================================
-# ABA 2: IMPORTAÇÃO EM LOTE (INTELIGENTE: CRIA OU ATUALIZA)
+# ABA 2: IMPORTAÇÃO EM LOTE (MANTIDA ORIGINAL, MAS COMPATÍVEL)
 # ==============================================================================
 with tab_importar:
     st.subheader("Importação Inteligente (Histórico e Legado)")
@@ -349,11 +386,13 @@ with tab_importar:
                                     
                             else:
                                 # CRIAR NOVA (INSERT)
+                                # IMPORTANTE: Na importação, se não vier especificado, assumimos Corretiva e com Parada (pior cenário) para segurança
+                                # Ou, se quiser, pode definir um padrão. Aqui vou deixar 'Corretiva' e '1' (Parada) como padrão
                                 status = "Concluído" if data_encerramento else ("Aberto (Parada)" if os_oficial else "Pendente")
                                 conn.execute("""
                                     INSERT INTO ordens_servico 
-                                    (data_hora, equipamento_id, local_atendimento, descricao, tipo_operacao_id, status, numero_os_oficial, horimetro, prioridade, data_encerramento)
-                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                    (data_hora, equipamento_id, local_atendimento, descricao, tipo_operacao_id, status, numero_os_oficial, horimetro, prioridade, data_encerramento, classificacao, maquina_parada)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Corretiva', 1)
                                 """, (data_abertura, equip_id, local, desc, op_id, status, os_oficial, horim, prio, data_encerramento))
                                 criados += 1
                             

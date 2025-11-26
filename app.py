@@ -16,10 +16,11 @@ def criar_pagina(arquivo, titulo, icone, default=False):
         return st.Page(arquivo, title=titulo, icon=icone, default=default)
     return None
 
-# Lista de páginas
+# Lista de páginas (ADICIONADO A NOVA PÁGINA AQUI)
 paginas_brutas = [
     ("pages/0_Inicio.py", "Início", "🏠", True),
     ("pages/1_Painel_Principal.py", "Visão Geral", "📊", False),
+    ("pages/15_Indicadores_KPI.py", "Indicadores KPI (MTBF/MTTR)", "📈", False), # <--- NOVA PÁGINA
     ("pages/7_Historico_Maquina.py", "Prontuário da Máquina", "🚜", False),
     ("pages/10_Mapa_Atendimentos.py", "Mapa de Ocorrências", "🗺️", False),
     ("pages/5_Nova_Ordem_Servico.py", "Abrir Chamado (OS)", "📝", False),
@@ -107,7 +108,6 @@ with st.sidebar:
             <div class="time" id="time">--:--:--</div>
             <div class="date" id="date">--/--/----</div>
             
-            <!-- Input Date Nativo -->
             <input type="date" id="picker">
         </div>
 
@@ -155,8 +155,9 @@ with st.sidebar:
     link_se_existir("Início")
     st.markdown("---")
     
-    with st.expander("📊 Dashboards", expanded=False):
+    with st.expander("📊 Dashboards", expanded=True): # Mudei para True para já abrir mostrando
         link_se_existir("Visão Geral")
+        link_se_existir("Indicadores KPI (MTBF/MTTR)") # <--- ADICIONADO NO MENU
         link_se_existir("Prontuário da Máquina")
         link_se_existir("Mapa de Ocorrências")
         
