@@ -215,10 +215,9 @@ with tab_editar:
                     # Lógica para encontrar o solicitante atual
                     idx_s = None
                     nome_solic_atual = selected_row['nome_solicitante']
-                    mat_solic_atual = selected_row['mat_solicitante']
                     
                     if pd.notna(nome_solic_atual):
-                        # Tenta casar nome e matrícula
+                        # Tenta casar nome
                         match_s = [f for f in funcs_list if nome_solic_atual in f]
                         if match_s: idx_s = funcs_list.index(match_s[0])
 
@@ -252,28 +251,33 @@ with tab_editar:
                     val_parada = bool(selected_row.get('maquina_parada', 1))
                     nova_parada = st.checkbox("Máquina Parada?", value=val_parada)
 
-                st.markdown("###### 📅 Datas e Local")
+                st.markdown("###### 📅 Datas (Edição Manual)")
                 val_abertura = selected_row['data_hora']
                 if pd.isnull(val_abertura): dt_ab_db = datetime.now(FUSO_HORARIO).replace(tzinfo=None)
                 else: dt_ab_db = val_abertura.to_pydatetime()
                 
                 col_d1, col_d2 = st.columns(2)
+                
+                # DATA ABERTURA (Com Formato BR)
                 with col_d1:
-                    d_ab = st.date_input("Data Abertura", value=dt_ab_db.date())
+                    d_ab = st.date_input("Data Abertura", value=dt_ab_db.date(), format="DD/MM/YYYY")
                     t_ab = st.time_input("Hora Abertura", value=dt_ab_db.time())
                 
+                # DATA ENCERRAMENTO (Com Formato BR)
                 nova_data_fim = None; nova_hora_fim = None
                 with col_d2:
                     if novo_status == "Concluído":
                         val_fim = selected_row['data_encerramento']
                         if pd.isnull(val_fim): dt_fim_db = datetime.now(FUSO_HORARIO).replace(tzinfo=None)
                         else: dt_fim_db = val_fim.to_pydatetime()
-                        nova_data_fim = st.date_input("Data Encerramento", value=dt_fim_db.date())
+                        nova_data_fim = st.date_input("Data Encerramento", value=dt_fim_db.date(), format="DD/MM/YYYY")
                         nova_hora_fim = st.time_input("Hora Encerramento", value=dt_fim_db.time())
                     else:
                         st.info("Mude para 'Concluído' para fechar a data.")
 
+                st.markdown("###### 📍 Localização")
                 col_loc, col_lat, col_lon = st.columns([2, 1, 1])
+                
                 with col_loc:
                     opcoes_local = areas_df['display'].tolist() if not areas_df.empty else []
                     val_local_atual = selected_row['local_atendimento']
@@ -302,7 +306,7 @@ with tab_editar:
                         if novo_func_display:
                             novo_func_id = funcionarios_df[funcionarios_df['display'] == novo_func_display]['id'].values[0]
 
-                        # ID do Solicitante (NOVO)
+                        # ID do Solicitante
                         novo_solic_id = None
                         if novo_solicitante_display:
                             novo_solic_id = funcionarios_df[funcionarios_df['display'] == novo_solicitante_display]['id'].values[0]
@@ -321,7 +325,6 @@ with tab_editar:
                         final_parada = 1 if nova_parada else 0
                         
                         conn = get_db_connection()
-                        # QUERY ATUALIZADA
                         sql = """
                             UPDATE ordens_servico 
                             SET status=?, local_atendimento=?, descricao=?, tipo_operacao_id=?, 
