@@ -25,6 +25,7 @@ def garantir_tabela_usuarios():
             force_change_password INTEGER DEFAULT 0
         )
     """)
+    # Cria usuário admin padrão se não existir
     cursor.execute("SELECT * FROM usuarios WHERE username = 'admin'")
     if not cursor.fetchone():
         try: pass_hash = hash_senha('1234')
@@ -34,55 +35,29 @@ def garantir_tabela_usuarios():
     conn.close()
 
 # --- Gerenciador de Cookies ---
-# Sem cache_resource para evitar erro de widget, mas com chave fixa
+# O cookie manager precisa ser instanciado uma única vez com uma chave fixa
 def get_manager():
     return stx.CookieManager(key="main_auth_manager")
 
-# --- FUNÇÃO PRINCIPAL ---
+# --- FUNÇÃO PRINCIPAL DE VERIFICAÇÃO ---
 def check_password():
     garantir_tabela_usuarios()
     
-    # Instancia o gerenciador
     cookie_manager = get_manager()
     
-    # DELAY ESTRATÉGICO: O Streamlit precisa de um momento para conectar com o JS do cookie
-    # Sem isso, ele lê None na primeira execução e pede login
+    # Pequeno delay para garantir carregamento dos cookies pelo componente JS
     time.sleep(0.1)
 
     # ==========================================================================
-    # 1. LOGOUT (SAIR)
+    # 1. TENTATIVA DE AUTO-LOGIN VIA COOKIE (PERSISTÊNCIA)
     # ==========================================================================
-    # Se clicou em sair, executamos a limpeza antes de qualquer verificação
-    if st.sidebar.button("Sair / Logout", key="btn_logout_sidebar") if st.session_state.get("logged_in") else False:
-        try: cookie_manager.delete("manutencao_user")
-        except: pass
-        
-        # Limpa todas as chaves de sessão
-        for key in list(st.session_state.keys()):
-            del st.session_state[key]
-        
-        st.session_state["just_logged_out"] = True
-        st.warning("Saindo...")
-        time.sleep(0.5)
-        st.rerun()
-
-    # Mostra usuário logado na barra lateral
-    if st.session_state.get("logged_in"):
-        with st.sidebar:
-            st.write(f"👤 **{st.session_state.get('user_nome', 'Usuário')}**")
-
-    # ==========================================================================
-    # 2. AUTO-LOGIN (RECUPERAÇÃO DE SESSÃO VIA COOKIE)
-    # ==========================================================================
-    # Se não está logado na RAM e não acabou de sair
-    if not st.session_state.get("logged_in") and not st.session_state.get("just_logged_out"):
+    # Se o usuário NÃO está na sessão RAM (nova aba ou F5), tentamos o cookie
+    if not st.session_state.get("logged_in"):
         try:
-            # Tenta ler o cookie
             cookies = cookie_manager.get_all()
             cookie_user = cookies.get("manutencao_user")
             
             if cookie_user:
-                # Valida no banco
                 conn = sqlite3.connect("manutencao.db")
                 cursor = conn.cursor()
                 cursor.execute("SELECT nome, force_change_password FROM usuarios WHERE username = ?", (cookie_user,))
@@ -90,93 +65,74 @@ def check_password():
                 conn.close()
                 
                 if dados:
-                    # SUCESSO: Restaura a sessão
+                    # RECONSTRÓI A SESSÃO
                     st.session_state["logged_in"] = True
                     st.session_state["username"] = cookie_user
                     st.session_state["user_nome"] = dados[0]
                     st.session_state["force_change"] = (dados[1] == 1)
-                    st.rerun() # Recarrega a página já logado
-        except:
-            pass
-    
-    # Reseta a flag de logout para permitir login futuro
-    if st.session_state.get("just_logged_out"):
-        st.session_state["just_logged_out"] = False
+                    # Nota: Não usamos st.rerun() aqui para evitar loop infinito de recarregamento.
+                    # O fluxo segue naturalmente e libera o acesso abaixo.
+        except Exception as e:
+            print(f"Erro ao ler cookie: {e}")
 
     # ==========================================================================
-    # 3. VERIFICAÇÃO DE BLOQUEIO (TROCA DE SENHA)
+    # 2. SE ESTIVER LOGADO (Sessão ou Cookie validado acima)
     # ==========================================================================
-    # Se estiver logado, verifica se precisa trocar senha
     if st.session_state.get("logged_in"):
+        
+        # A) Bloqueio de Troca de Senha Obrigatória
         if st.session_state.get("force_change", False):
-            # Bloqueio de segurança
             st.markdown("<style>[data-testid='stSidebar'] { display: none; }</style>", unsafe_allow_html=True)
-            st.title("⚠️ Atualização de Segurança")
-            with st.container(border=True):
-                st.warning("Sua senha precisa ser redefinida.")
-                with st.form("form_force_change"):
-                    p1 = st.text_input("Nova Senha", type="password")
-                    p2 = st.text_input("Confirmar", type="password")
-                    if st.form_submit_button("Salvar"):
-                        if p1 != p2 or not p1:
-                            st.error("Senhas inválidas.")
-                        else:
-                            try:
-                                senha_nova_hash = hash_senha(p1)
-                            except:
-                                senha_nova_hash = p1
-                            conn = sqlite3.connect("manutencao.db")
-                            conn.execute("UPDATE usuarios SET password = ?, force_change_password = 0 WHERE username = ?", (senha_nova_hash, st.session_state["username"]))
-                            conn.commit()
-                            conn.close()
-                            st.session_state["force_change"] = False
-                            st.success("Senha alterada!")
-                            time.sleep(1)
-                            st.rerun()
-            return False # Bloqueia o resto do app
-        
-        return True # LIBERA O ACESSO AO APP
-
-    # ==========================================================================
-    # 4. TELA DE LOGIN (ANIMAÇÃO + FORMULÁRIO)
-    # ==========================================================================
-    
-    # Animação de Carregamento (Login Manual)
-    if st.session_state.get("login_em_processamento"):
-        st.markdown("""
-        <style>
-        @keyframes bounce { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-20px); } }
-        .loading-overlay {
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background-color: #0E1117; z-index: 99999;
-            display: flex; flex-direction: column; justify-content: center; align-items: center; color: white;
-        }
-        .tractor-icon { font-size: 80px; animation: bounce 0.6s infinite alternate; }
-        .loading-text { font-family: sans-serif; font-size: 24px; margin-top: 20px; font-weight: bold; }
-        </style>
-        <div class="loading-overlay"><div class="tractor-icon">🚜</div><div class="loading-text">Acessando Sistema...</div></div>
-        """, unsafe_allow_html=True)
-        
-        time.sleep(2.0)
-        
-        dados = st.session_state["temp_user_data"]
-        st.session_state["logged_in"] = True
-        st.session_state["username"] = dados['username']
-        st.session_state["user_nome"] = dados['nome']
-        st.session_state["force_change"] = (dados['force_change'] == 1)
-        
-        if st.session_state.get("temp_manter"):
-            try:
-                expires = datetime.now() + timedelta(days=30)
-                cookie_manager.set("manutencao_user", dados['username'], expires_at=expires)
-            except: pass
+            st.title("⚠️ Atualização de Segurança Obrigatória")
+            st.markdown("---")
             
-        del st.session_state["login_em_processamento"]
-        del st.session_state["temp_user_data"]
-        st.rerun()
-        return True
+            col_c, col_bx, col_v = st.columns([1, 2, 1])
+            with col_bx:
+                with st.container(border=True):
+                    st.warning("Primeiro acesso detectado. Defina sua senha pessoal.")
+                    with st.form("form_force_change"):
+                        p1 = st.text_input("Nova Senha", type="password")
+                        p2 = st.text_input("Confirmar Nova Senha", type="password")
+                        
+                        if st.form_submit_button("🔒 Atualizar Senha", type="primary"):
+                            if p1 != p2 or not p1:
+                                st.error("Senhas inválidas.")
+                            else:
+                                try: nova_hash = hash_senha(p1)
+                                except: nova_hash = p1
+                                    
+                                conn = sqlite3.connect("manutencao.db")
+                                conn.execute("UPDATE usuarios SET password = ?, force_change_password = 0 WHERE username = ?", (nova_hash, st.session_state["username"]))
+                                conn.commit()
+                                conn.close()
+                                
+                                st.session_state["force_change"] = False
+                                st.success("Senha atualizada! Acesso liberado.")
+                                time.sleep(1)
+                                st.rerun()
+            return False # Bloqueia o app enquanto não trocar
+        
+        # B) Acesso Liberado (Sidebar + Logout)
+        with st.sidebar:
+            st.write(f"👤 **{st.session_state.get('user_nome', 'Usuário')}**")
+            
+            if st.button("Sair / Logout"):
+                # 1. Apaga o cookie (mata a persistência)
+                cookie_manager.delete("manutencao_user")
+                
+                # 2. Limpa a sessão (mata a memória RAM)
+                for key in ["logged_in", "user_nome", "username", "force_change"]:
+                    if key in st.session_state: del st.session_state[key]
+                
+                st.warning("Saindo...")
+                time.sleep(1)
+                st.rerun()
+        
+        return True # Retorna True para o app.py carregar as páginas
 
-    # Formulário de Login
+    # ==========================================================================
+    # 3. TELA DE LOGIN (Se não tiver cookie nem sessão)
+    # ==========================================================================
     st.markdown("<style>[data-testid='stSidebar'] { display: none; }</style>", unsafe_allow_html=True)
     st.markdown("<style>.block-container { padding-top: 3rem; }</style>", unsafe_allow_html=True)
 
@@ -185,14 +141,17 @@ def check_password():
         with st.container(border=True):
             st.markdown("<h2 style='text-align: center;'>🚜 Controle Agrícola</h2>", unsafe_allow_html=True)
             st.divider()
+            
             col_icon, col_form = st.columns([1, 1.5])
             with col_icon:
                 st.markdown("<div style='text-align: center; font-size: 80px;'>⚙️</div>", unsafe_allow_html=True)
+            
             with col_form:
                 with st.form("login_form"):
                     user = st.text_input("Usuário")
                     pw = st.text_input("Senha", type="password")
-                    manter = st.checkbox("Manter conectado", value=True)
+                    # Checkbox padrão marcado para facilitar a vida
+                    manter_conectado = st.checkbox("Manter conectado por 30 dias", value=True)
                     
                     if st.form_submit_button("ACESSAR", type="primary", use_container_width=True):
                         conn = sqlite3.connect("manutencao.db")
@@ -205,14 +164,24 @@ def check_password():
                         if res:
                             senha_banco = res[1]
                             if verificar_senha(pw, senha_banco): senha_ok = True
-                            elif pw == senha_banco: senha_ok = True
+                            elif pw == senha_banco: senha_ok = True # Fallback texto plano
                         
                         if senha_ok:
-                            st.session_state["login_em_processamento"] = True
-                            st.session_state["temp_user_data"] = {'username': user, 'nome': res[0], 'force_change': res[2]}
-                            st.session_state["temp_manter"] = manter
+                            # 1. Atualiza Sessão Imediata
+                            st.session_state["logged_in"] = True
+                            st.session_state["username"] = user
+                            st.session_state["user_nome"] = res[0]
+                            st.session_state["force_change"] = (res[2] == 1)
+                            
+                            # 2. Grava Cookie Persistente (Se marcado)
+                            if manter_conectado:
+                                expires = datetime.now() + timedelta(days=30)
+                                cookie_manager.set("manutencao_user", user, expires_at=expires)
+                            
+                            st.success("Login realizado com sucesso!")
+                            time.sleep(0.5)
                             st.rerun()
                         else:
-                            st.error("Acesso Negado.")
+                            st.error("Usuário ou senha incorretos.")
 
     return False
