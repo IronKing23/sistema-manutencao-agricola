@@ -35,19 +35,14 @@ def garantir_tabela_usuarios():
     conn.close()
 
 # --- Gerenciador de Cookies ---
-# Removido cache_resource pois causa TypeError com este componente específico
 def get_manager():
     return stx.CookieManager(key="main_auth_manager")
 
 # --- FUNÇÃO PRINCIPAL DE VERIFICAÇÃO ---
 def check_password():
     garantir_tabela_usuarios()
-    
-    # Recupera a instância
     cookie_manager = get_manager()
     
-    # Pequeno delay inicial para o componente montar
-    # (Menor que antes, pois a lógica de retry vai cuidar do resto)
     time.sleep(0.1)
 
     # ==========================================================================
@@ -55,55 +50,42 @@ def check_password():
     # ==========================================================================
     if st.session_state.get("logged_in"):
         if st.sidebar.button("Sair / Logout", key="logout_btn_sidebar"):
-            try:
-                cookie_manager.delete("manutencao_user")
+            try: cookie_manager.delete("manutencao_user")
             except: pass
             
-            # Limpa sessão
-            keys_to_remove = ["logged_in", "user_nome", "username", "force_change"]
-            for key in keys_to_remove:
+            for key in ["logged_in", "user_nome", "username", "force_change"]:
                 if key in st.session_state: del st.session_state[key]
             
             st.session_state["just_logged_out"] = True
-            st.warning("Saindo do sistema...")
+            st.toast("Sessão encerrada.", icon="👋")
             time.sleep(1)
             st.rerun()
 
     # ==========================================================================
-    # 2. TENTATIVA DE AUTO-LOGIN VIA COOKIE (COM RETRY PARA WEB)
+    # 2. TENTATIVA DE AUTO-LOGIN (COOKIE)
     # ==========================================================================
-    # Só tenta ler cookie se não estiver logado E não acabou de sair
     if not st.session_state.get("logged_in") and not st.session_state.get("just_logged_out"):
-        
         placeholder = st.empty()
         cookie_user = None
         
         try:
-            # Tenta ler (pode vir None na primeira passada rápida)
             raw_cookies = cookie_manager.get_all()
             cookie_user = raw_cookies.get("manutencao_user") if raw_cookies else None
             
-            # LÓGICA DE ESPERA INTELIGENTE
-            # Se não achou cookie, espera um pouco e tenta de novo (pode ser latência)
             if not cookie_user:
                 with placeholder.container():
-                    # Um spinner vazio/invisível apenas para segurar a execução visualmente se necessário
-                    time.sleep(0.5) # Espera 0.5s
-                    
+                    time.sleep(0.5)
                     raw_cookies = cookie_manager.get_all()
                     cookie_user = raw_cookies.get("manutencao_user") if raw_cookies else None
                     
                     if not cookie_user:
-                        time.sleep(0.5) # Tenta mais uma vez
+                        time.sleep(0.5)
                         raw_cookies = cookie_manager.get_all()
                         cookie_user = raw_cookies.get("manutencao_user") if raw_cookies else None
-
-        except Exception as e:
-            print(f"Erro leitura cookie: {e}")
+        except: pass
         
         placeholder.empty()
 
-        # Se achou cookie válido após as tentativas
         if cookie_user:
             try:
                 conn = sqlite3.connect("manutencao.db")
@@ -118,8 +100,7 @@ def check_password():
                     st.session_state["user_nome"] = dados[0]
                     st.session_state["force_change"] = (dados[1] == 1)
                     st.rerun()
-            except Exception as e:
-                print(f"Erro validação banco: {e}")
+            except: pass
 
     if st.session_state.get("just_logged_out"):
         st.session_state["just_logged_out"] = False
@@ -128,95 +109,219 @@ def check_password():
     # 3. SE ESTIVER LOGADO
     # ==========================================================================
     if st.session_state.get("logged_in"):
-        
         if st.session_state.get("force_change", False):
             st.markdown("<style>[data-testid='stSidebar'] { display: none; }</style>", unsafe_allow_html=True)
-            st.title("⚠️ Atualização de Segurança Obrigatória")
-            st.markdown("---")
-            
-            col_c, col_bx, col_v = st.columns([1, 2, 1])
+            st.title("⚠️ Segurança")
+            col_bx, _ = st.columns([2, 1])
             with col_bx:
                 with st.container(border=True):
-                    st.warning("Primeiro acesso detectado. Defina sua senha pessoal.")
+                    st.warning("Defina sua senha pessoal.")
                     with st.form("form_force_change"):
                         p1 = st.text_input("Nova Senha", type="password")
-                        p2 = st.text_input("Confirmar Nova Senha", type="password")
-                        
-                        if st.form_submit_button("🔒 Atualizar Senha", type="primary"):
-                            if p1 != p2 or not p1:
-                                st.error("Senhas inválidas.")
-                            else:
-                                try: nova_hash = hash_senha(p1)
-                                except: nova_hash = p1
-                                    
+                        p2 = st.text_input("Confirmar", type="password")
+                        if st.form_submit_button("Salvar"):
+                            if p1==p2 and p1:
+                                try: nh = hash_senha(p1)
+                                except: nh = p1
                                 conn = sqlite3.connect("manutencao.db")
-                                conn.execute("UPDATE usuarios SET password = ?, force_change_password = 0 WHERE username = ?", (nova_hash, st.session_state["username"]))
-                                conn.commit()
-                                conn.close()
-                                
+                                conn.execute("UPDATE usuarios SET password=?, force_change_password=0 WHERE username=?", (nh, st.session_state["username"]))
+                                conn.commit(); conn.close()
                                 st.session_state["force_change"] = False
-                                st.success("Senha atualizada! Acesso liberado.")
-                                time.sleep(1)
                                 st.rerun()
+                            else: st.error("Erro na senha.")
             return False
         
         with st.sidebar:
             st.write(f"👤 **{st.session_state.get('user_nome', 'Usuário')}**")
-        
         return True
 
     # ==========================================================================
-    # 4. TELA DE LOGIN
+    # 4. TELA DE LOGIN (VISUAL CORRIGIDO + ANIMAÇÃO FULLSCREEN)
     # ==========================================================================
     st.markdown("<style>[data-testid='stSidebar'] { display: none; }</style>", unsafe_allow_html=True)
-    st.markdown("<style>.block-container { padding-top: 3rem; }</style>", unsafe_allow_html=True)
+    
+    st.markdown("""
+    <style>
+    .block-container { padding-top: 5rem; }
+    
+    /* Remove borda e fundo do formulário para ele se fundir ao container */
+    [data-testid="stForm"] {
+        border: none;
+        padding: 0;
+        box-shadow: none;
+        background-color: transparent;
+    }
+    
+    /* Animações Básicas */
+    @keyframes bounce-tractor {
+        0%, 20%, 50%, 80%, 100% {transform: translateY(0);}
+        40% {transform: translateY(-10px);}
+        60% {transform: translateY(-5px);}
+    }
+    .anim-tractor {
+        display: inline-block;
+        animation: bounce-tractor 2.5s infinite;
+        line-height: 1;
+    }
 
-    c1, c2, c3 = st.columns([1, 4, 1])
-    with c2:
-        with st.container(border=True):
-            st.markdown("<h2 style='text-align: center;'>🚜 Controle Agrícola</h2>", unsafe_allow_html=True)
-            st.divider()
+    @keyframes spin-gear {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+    }
+    .anim-gear {
+        display: inline-block;
+        animation: spin-gear 12s linear infinite;
+        transform-origin: center;
+        cursor: help;
+        line-height: 1;
+    }
+    
+    /* Título */
+    .login-title {
+        font-family: 'Helvetica', sans-serif;
+        font-weight: 800; 
+        font-size: 26px; 
+        color: #2E7D32; 
+        line-height: 1.1;
+    }
+    
+    /* --- TELA DE CARREGAMENTO (FULLSCREEN) --- */
+    #loading-screen {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        background-color: #0e1117; /* Cor de fundo escura moderna */
+        z-index: 99999;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-family: 'Helvetica', sans-serif;
+    }
+    
+    .loader-content {
+        text-align: center;
+        animation: fadeIn 0.5s ease-in;
+    }
+    
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    
+    .progress-container {
+        width: 300px;
+        height: 6px;
+        background-color: #333;
+        border-radius: 10px;
+        margin-top: 20px;
+        overflow: hidden;
+        position: relative;
+    }
+    
+    .progress-bar {
+        height: 100%;
+        background-color: #2E7D32; /* Verde do sistema */
+        width: 0%;
+        animation: load 2.5s ease-out forwards;
+        border-radius: 10px;
+    }
+    
+    @keyframes load {
+        0% { width: 0%; }
+        50% { width: 60%; }
+        100% { width: 100%; }
+    }
+    
+    .jumping-tractor {
+        font-size: 80px;
+        animation: bounce-tractor 1s infinite;
+        margin-bottom: 10px;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    c1, c2, c3 = st.columns([1, 1.2, 1])
+    
+    # Container da tela de login
+    login_container = c2.container(border=True)
+    
+    with login_container:
+        
+        # --- CABEÇALHO ---
+        st.markdown("""
+        <div style="display: flex; align-items: center; justify-content: center; margin-top: 20px; margin-bottom: 20px;">
+            <div style="display: flex; align-items: center; gap: 15px;">
+                <div class="anim-tractor" style="font-size: 48px;">🚜</div>
+                <div class="login-title">
+                    Controle<br>Agrícola
+                </div>
+            </div>
+            <div class="anim-gear" style="font-size: 36px; color: #2E7D32; margin-left: 20px;">
+                ⚙️
+            </div>
+        </div>
+        <p style="text-align: center; color: #6c757d; font-size: 0.9rem; margin-bottom: 20px;">
+            Bem-vindo! Insira suas credenciais.
+        </p>
+        """, unsafe_allow_html=True)
+        
+        # --- FORMULÁRIO ---
+        with st.form("login_form"):
+            user = st.text_input("Usuário", placeholder="Digite seu usuário...")
+            pw = st.text_input("Senha", type="password", placeholder="••••••••")
             
-            col_icon, col_form = st.columns([1, 1.5])
-            with col_icon:
-                st.markdown("<div style='text-align: center; font-size: 80px;'>⚙️</div>", unsafe_allow_html=True)
+            st.markdown("<div style='margin-bottom: 10px;'></div>", unsafe_allow_html=True)
+            manter = st.checkbox("Manter conectado (30 dias)", value=True)
+            st.markdown("<div style='margin-bottom: 20px;'></div>", unsafe_allow_html=True)
             
-            with col_form:
-                with st.form("login_form"):
-                    user = st.text_input("Usuário")
-                    pw = st.text_input("Senha", type="password")
-                    manter_conectado = st.checkbox("Manter conectado (30 dias)", value=True)
+            submitted = st.form_submit_button("ACESSAR SISTEMA", type="primary", use_container_width=True)
+            
+            if submitted:
+                conn = sqlite3.connect("manutencao.db")
+                cursor = conn.cursor()
+                cursor.execute("SELECT nome, password, force_change_password FROM usuarios WHERE username = ?", (user,))
+                res = cursor.fetchone()
+                conn.close()
+                
+                senha_ok = False
+                if res:
+                    if verificar_senha(pw, res[1]): senha_ok = True
+                    elif pw == res[1]: senha_ok = True
+                
+                if senha_ok:
+                    # --- ANIMAÇÃO FULLSCREEN ---
+                    # Injeta o HTML de overlay que cobre a tela inteira
+                    st.markdown("""
+                    <div id="loading-screen">
+                        <div class="loader-content">
+                            <div class="jumping-tractor">🚜</div>
+                            <h2 style="color: #2E7D32; margin-bottom: 5px;">Iniciando Sistema...</h2>
+                            <p style="color: #888; font-size: 14px;">Carregando módulos e dados...</p>
+                            <div class="progress-container">
+                                <div class="progress-bar"></div>
+                            </div>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
                     
-                    if st.form_submit_button("ACESSAR", type="primary", use_container_width=True):
-                        conn = sqlite3.connect("manutencao.db")
-                        cursor = conn.cursor()
-                        cursor.execute("SELECT nome, password, force_change_password FROM usuarios WHERE username = ?", (user,))
-                        res = cursor.fetchone()
-                        conn.close()
-                        
-                        senha_ok = False
-                        if res:
-                            senha_banco = res[1]
-                            if verificar_senha(pw, senha_banco): senha_ok = True
-                            elif pw == senha_banco: senha_ok = True
-                        
-                        if senha_ok:
-                            st.session_state["logged_in"] = True
-                            st.session_state["username"] = user
-                            st.session_state["user_nome"] = res[0]
-                            st.session_state["force_change"] = (res[2] == 1)
-                            
-                            if manter_conectado:
-                                try:
-                                    expires = datetime.now() + timedelta(days=30)
-                                    cookie_manager.set("manutencao_user", user, expires_at=expires)
-                                except Exception as e:
-                                    print(f"Erro ao gravar cookie: {e}")
-                            
-                            st.success("Login realizado! Redirecionando...")
-                            time.sleep(1.0)
-                            st.rerun()
-                        else:
-                            st.error("Usuário ou senha incorretos.")
+                    # Simula tempo para a barra encher visualmente
+                    time.sleep(2.2) 
+                    
+                    # Registra Sessão
+                    st.session_state["logged_in"] = True
+                    st.session_state["username"] = user
+                    st.session_state["user_nome"] = res[0]
+                    st.session_state["force_change"] = (res[2] == 1)
+                    
+                    if manter:
+                        try:
+                            expires = datetime.now() + timedelta(days=30)
+                            cookie_manager.set("manutencao_user", user, expires_at=expires)
+                        except: pass
+                    
+                    st.rerun()
+                else:
+                    st.error("Acesso Negado. Verifique seus dados.")
 
     return False
