@@ -34,10 +34,8 @@ def garantir_tabela_usuarios():
         conn.commit()
     conn.close()
 
-# --- Gerenciador de Cookies (COM CACHE PARA EVITAR DUPLICATE KEY) ---
-# O decorator @st.cache_resource garante que este objeto seja criado apenas UMA vez
-# e reutilizado em todos os reruns, evitando o erro 'StreamlitDuplicateElementKey'.
-@st.cache_resource(experimental_allow_widgets=True)
+# --- Gerenciador de Cookies ---
+# Removido cache_resource pois causa TypeError com este componente específico
 def get_manager():
     return stx.CookieManager(key="main_auth_manager")
 
@@ -45,9 +43,13 @@ def get_manager():
 def check_password():
     garantir_tabela_usuarios()
     
-    # Recupera a instância única do gerenciador
+    # Recupera a instância
     cookie_manager = get_manager()
     
+    # Pequeno delay inicial para o componente montar
+    # (Menor que antes, pois a lógica de retry vai cuidar do resto)
+    time.sleep(0.1)
+
     # ==========================================================================
     # 1. LOGOUT (SAIR)
     # ==========================================================================
@@ -58,8 +60,9 @@ def check_password():
             except: pass
             
             # Limpa sessão
-            for key in list(st.session_state.keys()):
-                del st.session_state[key]
+            keys_to_remove = ["logged_in", "user_nome", "username", "force_change"]
+            for key in keys_to_remove:
+                if key in st.session_state: del st.session_state[key]
             
             st.session_state["just_logged_out"] = True
             st.warning("Saindo do sistema...")
@@ -69,25 +72,38 @@ def check_password():
     # ==========================================================================
     # 2. TENTATIVA DE AUTO-LOGIN VIA COOKIE (COM RETRY PARA WEB)
     # ==========================================================================
+    # Só tenta ler cookie se não estiver logado E não acabou de sair
     if not st.session_state.get("logged_in") and not st.session_state.get("just_logged_out"):
         
         placeholder = st.empty()
+        cookie_user = None
         
-        # Tenta ler
-        cookies = cookie_manager.get_all()
-        cookie_user = cookies.get("manutencao_user") if cookies else None
-        
-        # LÓGICA DE ESPERA (LATÊNCIA CLOUD)
-        if not cookie_user:
-            with placeholder.container():
-                # Spinner silencioso para dar tempo ao JS
-                with st.spinner(""):
-                    time.sleep(1.0) 
-                    cookies = cookie_manager.get_all()
-                    cookie_user = cookies.get("manutencao_user") if cookies else None
+        try:
+            # Tenta ler (pode vir None na primeira passada rápida)
+            raw_cookies = cookie_manager.get_all()
+            cookie_user = raw_cookies.get("manutencao_user") if raw_cookies else None
+            
+            # LÓGICA DE ESPERA INTELIGENTE
+            # Se não achou cookie, espera um pouco e tenta de novo (pode ser latência)
+            if not cookie_user:
+                with placeholder.container():
+                    # Um spinner vazio/invisível apenas para segurar a execução visualmente se necessário
+                    time.sleep(0.5) # Espera 0.5s
+                    
+                    raw_cookies = cookie_manager.get_all()
+                    cookie_user = raw_cookies.get("manutencao_user") if raw_cookies else None
+                    
+                    if not cookie_user:
+                        time.sleep(0.5) # Tenta mais uma vez
+                        raw_cookies = cookie_manager.get_all()
+                        cookie_user = raw_cookies.get("manutencao_user") if raw_cookies else None
+
+        except Exception as e:
+            print(f"Erro leitura cookie: {e}")
         
         placeholder.empty()
 
+        # Se achou cookie válido após as tentativas
         if cookie_user:
             try:
                 conn = sqlite3.connect("manutencao.db")
@@ -103,7 +119,7 @@ def check_password():
                     st.session_state["force_change"] = (dados[1] == 1)
                     st.rerun()
             except Exception as e:
-                print(f"Erro validação cookie: {e}")
+                print(f"Erro validação banco: {e}")
 
     if st.session_state.get("just_logged_out"):
         st.session_state["just_logged_out"] = False
@@ -191,11 +207,14 @@ def check_password():
                             st.session_state["force_change"] = (res[2] == 1)
                             
                             if manter_conectado:
-                                expires = datetime.now() + timedelta(days=30)
-                                cookie_manager.set("manutencao_user", user, expires_at=expires)
+                                try:
+                                    expires = datetime.now() + timedelta(days=30)
+                                    cookie_manager.set("manutencao_user", user, expires_at=expires)
+                                except Exception as e:
+                                    print(f"Erro ao gravar cookie: {e}")
                             
                             st.success("Login realizado! Redirecionando...")
-                            time.sleep(1.5) 
+                            time.sleep(1.0)
                             st.rerun()
                         else:
                             st.error("Usuário ou senha incorretos.")
