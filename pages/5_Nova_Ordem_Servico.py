@@ -16,7 +16,9 @@ st.title("📋 Nova Ordem de Serviço")
 # Fuso Horário
 FUSO_HORARIO = pytz.timezone('America/Campo_Grande')
 
-# --- Funções de Carregamento ---
+# --- Funções de Carregamento (COM CACHE) ---
+
+@st.cache_data(ttl=300, show_spinner="Carregando frotas...")
 def carregar_frotas():
     conn = get_db_connection()
     # ATUALIZADO: Agora busca também o gestao_responsavel
@@ -25,12 +27,14 @@ def carregar_frotas():
     frotas['display'] = frotas['frota'] + " - " + frotas['modelo']
     return frotas
 
+@st.cache_data(ttl=300)
 def carregar_operacoes():
     conn = get_db_connection()
     operacoes = pd.read_sql_query("SELECT id, nome FROM tipos_operacao ORDER BY nome", conn)
     conn.close()
     return operacoes
 
+@st.cache_data(ttl=300)
 def carregar_funcionarios():
     conn = get_db_connection()
     funcs = pd.read_sql_query("SELECT id, nome, matricula, setor FROM funcionarios ORDER BY nome", conn)
@@ -41,6 +45,7 @@ def carregar_funcionarios():
         funcs['display'] = []
     return funcs
 
+@st.cache_data(ttl=300)
 def carregar_areas():
     conn = get_db_connection()
     try:
@@ -55,6 +60,7 @@ def carregar_areas():
     finally:
         conn.close()
 
+# Função SEM CACHE (Deve consultar o estado real no momento)
 def obter_ordem_aberta(equipamento_id):
     conn = get_db_connection()
     try:
