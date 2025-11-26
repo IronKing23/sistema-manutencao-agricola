@@ -43,7 +43,7 @@ def check_password():
     garantir_tabela_usuarios()
     cookie_manager = get_manager()
     
-    # Pequeno delay inicial para o componente montar
+    # Pequeno delay inicial para garantir que o componente de cookies carregue
     time.sleep(0.1)
 
     # ==========================================================================
@@ -66,26 +66,27 @@ def check_password():
     # ==========================================================================
     # 2. TENTATIVA DE AUTO-LOGIN (COOKIE)
     # ==========================================================================
+    # Se não está logado na sessão atual e não acabou de fazer logout
     if not st.session_state.get("logged_in") and not st.session_state.get("just_logged_out"):
         placeholder = st.empty()
         cookie_user = None
         
         try:
-            # Tenta ler o cookie (pode vir None na primeira passada rápida)
+            # Tenta ler todos os cookies
             raw_cookies = cookie_manager.get_all()
             cookie_user = raw_cookies.get("manutencao_user") if raw_cookies else None
             
             # LÓGICA DE ESPERA INTELIGENTE (RETRY)
-            # Se não achou cookie, espera um pouco e tenta de novo (pode ser latência)
+            # Se não achou o cookie de primeira, espera um pouco e tenta de novo (latência da web)
             if not cookie_user:
                 with placeholder.container():
-                    # Tentativa 2 (Esperar 0.5s)
+                    # Tentativa 2
                     time.sleep(0.5)
                     raw_cookies = cookie_manager.get_all()
                     cookie_user = raw_cookies.get("manutencao_user") if raw_cookies else None
                     
                     if not cookie_user:
-                        # Tentativa 3 (Esperar mais 0.5s)
+                        # Tentativa 3
                         time.sleep(0.5)
                         raw_cookies = cookie_manager.get_all()
                         cookie_user = raw_cookies.get("manutencao_user") if raw_cookies else None
@@ -93,7 +94,7 @@ def check_password():
         
         placeholder.empty()
 
-        # Se achou cookie válido após as tentativas
+        # Se encontrou um usuário no cookie, valida no banco
         if cookie_user:
             try:
                 conn = sqlite3.connect("manutencao.db")
@@ -103,20 +104,23 @@ def check_password():
                 conn.close()
                 
                 if dados:
+                    # SUCESSO: Restaura a sessão
                     st.session_state["logged_in"] = True
                     st.session_state["username"] = cookie_user
                     st.session_state["user_nome"] = dados[0]
                     st.session_state["force_change"] = (dados[1] == 1)
-                    st.rerun()
+                    st.rerun() # Recarrega a página já logado
             except: pass
 
+    # Limpa flag de logout para permitir login futuro
     if st.session_state.get("just_logged_out"):
         st.session_state["just_logged_out"] = False
 
     # ==========================================================================
-    # 3. SE ESTIVER LOGADO
+    # 3. SE ESTIVER LOGADO (ACESSO PERMITIDO)
     # ==========================================================================
     if st.session_state.get("logged_in"):
+        # Verificação de troca de senha obrigatória
         if st.session_state.get("force_change", False):
             st.markdown("<style>[data-testid='stSidebar'] { display: none; }</style>", unsafe_allow_html=True)
             st.title("⚠️ Segurança")
@@ -326,7 +330,7 @@ def check_password():
                     
                     if manter:
                         try:
-                            # CORREÇÃO: Usando data simples e compatível
+                            # CORREÇÃO: Usando datetime.now() + timedelta() para criar a data de expiração
                             expires_at = datetime.now() + timedelta(days=30)
                             cookie_manager.set("manutencao_user", user, expires_at=expires_at)
                         except Exception as e:
