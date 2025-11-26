@@ -62,30 +62,41 @@ def check_password():
             st.rerun()
 
     # ==========================================================================
-    # 2. TENTATIVA DE AUTO-LOGIN (COOKIE)
+    # 2. TENTATIVA DE AUTO-LOGIN (COOKIE) - COM RETRY ROBUSTO
     # ==========================================================================
     if not st.session_state.get("logged_in") and not st.session_state.get("just_logged_out"):
         placeholder = st.empty()
         cookie_user = None
         
         try:
+            # Tenta ler o cookie (pode vir None na primeira passada rápida)
             raw_cookies = cookie_manager.get_all()
             cookie_user = raw_cookies.get("manutencao_user") if raw_cookies else None
             
+            # LÓGICA DE ESPERA INTELIGENTE
+            # Se não achou cookie, espera um pouco e tenta de novo (pode ser latência)
             if not cookie_user:
                 with placeholder.container():
+                    # Um spinner invisível/vazio apenas para segurar a execução visualmente se necessário
+                    # time.sleep(0.5) 
+                    
+                    # Tentativa 2
                     time.sleep(0.5)
                     raw_cookies = cookie_manager.get_all()
                     cookie_user = raw_cookies.get("manutencao_user") if raw_cookies else None
                     
                     if not cookie_user:
-                        time.sleep(0.5)
+                        # Tentativa 3 (Final)
+                        time.sleep(0.5) 
                         raw_cookies = cookie_manager.get_all()
                         cookie_user = raw_cookies.get("manutencao_user") if raw_cookies else None
-        except: pass
+
+        except Exception as e:
+            print(f"Erro leitura cookie: {e}")
         
         placeholder.empty()
 
+        # Se achou cookie válido após as tentativas
         if cookie_user:
             try:
                 conn = sqlite3.connect("manutencao.db")
@@ -100,7 +111,8 @@ def check_password():
                     st.session_state["user_nome"] = dados[0]
                     st.session_state["force_change"] = (dados[1] == 1)
                     st.rerun()
-            except: pass
+            except Exception as e:
+                print(f"Erro validação banco: {e}")
 
     if st.session_state.get("just_logged_out"):
         st.session_state["just_logged_out"] = False
