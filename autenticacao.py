@@ -43,31 +43,59 @@ def get_manager():
 def check_password():
     garantir_tabela_usuarios()
     
+    # Inicializa o gerenciador
     cookie_manager = get_manager()
     
     # ==========================================================================
-    # 1. TENTATIVA DE AUTO-LOGIN VIA COOKIE (COM RETRY PARA WEB)
+    # 1. LOGOUT (SAIR)
     # ==========================================================================
-    # Se o usuário NÃO está logado na sessão atual (RAM), tentamos recuperar via Cookie.
-    if not st.session_state.get("logged_in"):
-        try:
-            # Primeira tentativa de leitura
-            cookies = cookie_manager.get_all()
+    # Verifica se o botão de sair foi clicado na barra lateral
+    if st.session_state.get("logged_in"):
+        if st.sidebar.button("Sair / Logout", key="logout_btn_sidebar"):
+            try:
+                cookie_manager.delete("manutencao_user")
+            except: pass
             
-            # LÓGICA DE RETENTATIVA (CORREÇÃO PARA CLOUD/WEB)
-            # Se a lista de cookies vier vazia ou nula, pode ser apenas latência da rede.
-            # Esperamos um pouco e tentamos ler novamente.
-            if not cookies or "manutencao_user" not in cookies:
-                time.sleep(0.3) # Aguarda o componente JS carregar
-                cookies = cookie_manager.get_all()
-                
-                if not cookies or "manutencao_user" not in cookies:
-                    time.sleep(0.3) # Segunda chance
-                    cookies = cookie_manager.get_all()
+            # Limpa sessão
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            
+            st.session_state["just_logged_out"] = True
+            st.warning("Saindo do sistema...")
+            time.sleep(1)
+            st.rerun()
 
-            cookie_user = cookies.get("manutencao_user")
-            
-            if cookie_user:
+    # ==========================================================================
+    # 2. TENTATIVA DE AUTO-LOGIN VIA COOKIE (COM RETRY PARA WEB)
+    # ==========================================================================
+    # Se não está logado e não acabou de sair, tenta recuperar o cookie
+    if not st.session_state.get("logged_in") and not st.session_state.get("just_logged_out"):
+        
+        # Container placeholder para evitar "piscada" da tela de login
+        placeholder = st.empty()
+        
+        # Tenta ler o cookie
+        cookies = cookie_manager.get_all()
+        cookie_user = cookies.get("manutencao_user") if cookies else None
+        
+        # LÓGICA DE ESPERA (CRUCIAL PARA O GIT/WEB)
+        # Se não achou o cookie de primeira, pode ser lag da rede. Esperamos um pouco.
+        if not cookie_user:
+            # Mostra um spinner discreto enquanto tenta reconectar
+            with placeholder.container():
+                with st.spinner("Verificando credenciais salvas..."):
+                    time.sleep(1.5) # Dá 1.5s para o navegador responder ao servidor
+                    
+                    # Tenta ler novamente após a espera
+                    cookies = cookie_manager.get_all()
+                    cookie_user = cookies.get("manutencao_user") if cookies else None
+        
+        # Limpa o placeholder (remove o spinner)
+        placeholder.empty()
+
+        # Se encontrou o cookie (agora ou depois da espera), valida no banco
+        if cookie_user:
+            try:
                 conn = sqlite3.connect("manutencao.db")
                 cursor = conn.cursor()
                 cursor.execute("SELECT nome, force_change_password FROM usuarios WHERE username = ?", (cookie_user,))
@@ -80,15 +108,16 @@ def check_password():
                     st.session_state["username"] = cookie_user
                     st.session_state["user_nome"] = dados[0]
                     st.session_state["force_change"] = (dados[1] == 1)
-                    
-                    # Força um rerun para atualizar a interface imediatamente com o login feito
-                    st.rerun()
-                    
-        except Exception as e:
-            print(f"Debug Cookie: {e}")
+                    st.rerun() # Recarrega para abrir o app
+            except Exception as e:
+                print(f"Erro validação cookie: {e}")
+
+    # Reseta flag de logout para permitir login futuro
+    if st.session_state.get("just_logged_out"):
+        st.session_state["just_logged_out"] = False
 
     # ==========================================================================
-    # 2. SE ESTIVER LOGADO (Sessão ou Cookie validado acima)
+    # 3. SE ESTIVER LOGADO (Sessão ou Cookie validado acima)
     # ==========================================================================
     if st.session_state.get("logged_in"):
         
@@ -122,30 +151,16 @@ def check_password():
                                 st.success("Senha atualizada! Acesso liberado.")
                                 time.sleep(1)
                                 st.rerun()
-            return False # Bloqueia o app enquanto não trocar
+            return False # Bloqueia o app
         
-        # B) Acesso Liberado (Sidebar + Logout)
+        # B) Acesso Liberado (Mostra usuário na sidebar)
         with st.sidebar:
             st.write(f"👤 **{st.session_state.get('user_nome', 'Usuário')}**")
-            
-            if st.button("Sair / Logout"):
-                # 1. Apaga o cookie (mata a persistência)
-                try:
-                    cookie_manager.delete("manutencao_user")
-                except: pass
-                
-                # 2. Limpa a sessão (mata a memória RAM)
-                for key in ["logged_in", "user_nome", "username", "force_change"]:
-                    if key in st.session_state: del st.session_state[key]
-                
-                st.warning("Saindo...")
-                time.sleep(1) # Tempo para o cookie ser deletado no navegador
-                st.rerun()
         
         return True # Retorna True para o app.py carregar as páginas
 
     # ==========================================================================
-    # 3. TELA DE LOGIN (Se não tiver cookie nem sessão)
+    # 4. TELA DE LOGIN (Se não tiver cookie nem sessão)
     # ==========================================================================
     st.markdown("<style>[data-testid='stSidebar'] { display: none; }</style>", unsafe_allow_html=True)
     st.markdown("<style>.block-container { padding-top: 3rem; }</style>", unsafe_allow_html=True)
@@ -164,8 +179,8 @@ def check_password():
                 with st.form("login_form"):
                     user = st.text_input("Usuário")
                     pw = st.text_input("Senha", type="password")
-                    # Checkbox padrão marcado para facilitar a vida
-                    manter_conectado = st.checkbox("Manter conectado por 30 dias", value=True)
+                    # Checkbox marcado por padrão
+                    manter_conectado = st.checkbox("Manter conectado (30 dias)", value=True)
                     
                     if st.form_submit_button("ACESSAR", type="primary", use_container_width=True):
                         conn = sqlite3.connect("manutencao.db")
@@ -178,7 +193,7 @@ def check_password():
                         if res:
                             senha_banco = res[1]
                             if verificar_senha(pw, senha_banco): senha_ok = True
-                            elif pw == senha_banco: senha_ok = True # Fallback texto plano
+                            elif pw == senha_banco: senha_ok = True # Fallback
                         
                         if senha_ok:
                             # 1. Atualiza Sessão Imediata
@@ -192,9 +207,9 @@ def check_password():
                                 expires = datetime.now() + timedelta(days=30)
                                 cookie_manager.set("manutencao_user", user, expires_at=expires)
                             
-                            st.success("Login realizado com sucesso!")
-                            # Delay maior no login para garantir que o cookie seja gravado antes do rerun
-                            time.sleep(1.0) 
+                            st.success("Login realizado! Redirecionando...")
+                            # Delay essencial para garantir que o cookie seja escrito antes do reload
+                            time.sleep(1.5) 
                             st.rerun()
                         else:
                             st.error("Usuário ou senha incorretos.")
