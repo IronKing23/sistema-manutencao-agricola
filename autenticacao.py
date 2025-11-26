@@ -34,22 +34,23 @@ def garantir_tabela_usuarios():
         conn.commit()
     conn.close()
 
-# --- Gerenciador de Cookies ---
+# --- Gerenciador de Cookies (COM CACHE PARA EVITAR DUPLICATE KEY) ---
+# O decorator @st.cache_resource garante que este objeto seja criado apenas UMA vez
+# e reutilizado em todos os reruns, evitando o erro 'StreamlitDuplicateElementKey'.
+@st.cache_resource(experimental_allow_widgets=True)
 def get_manager():
-    # key fixa é crucial para manter a referência entre reruns
     return stx.CookieManager(key="main_auth_manager")
 
 # --- FUNÇÃO PRINCIPAL DE VERIFICAÇÃO ---
 def check_password():
     garantir_tabela_usuarios()
     
-    # Inicializa o gerenciador
+    # Recupera a instância única do gerenciador
     cookie_manager = get_manager()
     
     # ==========================================================================
     # 1. LOGOUT (SAIR)
     # ==========================================================================
-    # Verifica se o botão de sair foi clicado na barra lateral
     if st.session_state.get("logged_in"):
         if st.sidebar.button("Sair / Logout", key="logout_btn_sidebar"):
             try:
@@ -68,32 +69,25 @@ def check_password():
     # ==========================================================================
     # 2. TENTATIVA DE AUTO-LOGIN VIA COOKIE (COM RETRY PARA WEB)
     # ==========================================================================
-    # Se não está logado e não acabou de sair, tenta recuperar o cookie
     if not st.session_state.get("logged_in") and not st.session_state.get("just_logged_out"):
         
-        # Container placeholder para evitar "piscada" da tela de login
         placeholder = st.empty()
         
-        # Tenta ler o cookie
+        # Tenta ler
         cookies = cookie_manager.get_all()
         cookie_user = cookies.get("manutencao_user") if cookies else None
         
-        # LÓGICA DE ESPERA (CRUCIAL PARA O GIT/WEB)
-        # Se não achou o cookie de primeira, pode ser lag da rede. Esperamos um pouco.
+        # LÓGICA DE ESPERA (LATÊNCIA CLOUD)
         if not cookie_user:
-            # Mostra um spinner discreto enquanto tenta reconectar
             with placeholder.container():
-                with st.spinner("Verificando credenciais salvas..."):
-                    time.sleep(1.5) # Dá 1.5s para o navegador responder ao servidor
-                    
-                    # Tenta ler novamente após a espera
+                # Spinner silencioso para dar tempo ao JS
+                with st.spinner(""):
+                    time.sleep(1.0) 
                     cookies = cookie_manager.get_all()
                     cookie_user = cookies.get("manutencao_user") if cookies else None
         
-        # Limpa o placeholder (remove o spinner)
         placeholder.empty()
 
-        # Se encontrou o cookie (agora ou depois da espera), valida no banco
         if cookie_user:
             try:
                 conn = sqlite3.connect("manutencao.db")
@@ -103,25 +97,22 @@ def check_password():
                 conn.close()
                 
                 if dados:
-                    # RECONSTRÓI A SESSÃO
                     st.session_state["logged_in"] = True
                     st.session_state["username"] = cookie_user
                     st.session_state["user_nome"] = dados[0]
                     st.session_state["force_change"] = (dados[1] == 1)
-                    st.rerun() # Recarrega para abrir o app
+                    st.rerun()
             except Exception as e:
                 print(f"Erro validação cookie: {e}")
 
-    # Reseta flag de logout para permitir login futuro
     if st.session_state.get("just_logged_out"):
         st.session_state["just_logged_out"] = False
 
     # ==========================================================================
-    # 3. SE ESTIVER LOGADO (Sessão ou Cookie validado acima)
+    # 3. SE ESTIVER LOGADO
     # ==========================================================================
     if st.session_state.get("logged_in"):
         
-        # A) Bloqueio de Troca de Senha Obrigatória
         if st.session_state.get("force_change", False):
             st.markdown("<style>[data-testid='stSidebar'] { display: none; }</style>", unsafe_allow_html=True)
             st.title("⚠️ Atualização de Segurança Obrigatória")
@@ -151,16 +142,15 @@ def check_password():
                                 st.success("Senha atualizada! Acesso liberado.")
                                 time.sleep(1)
                                 st.rerun()
-            return False # Bloqueia o app
+            return False
         
-        # B) Acesso Liberado (Mostra usuário na sidebar)
         with st.sidebar:
             st.write(f"👤 **{st.session_state.get('user_nome', 'Usuário')}**")
         
-        return True # Retorna True para o app.py carregar as páginas
+        return True
 
     # ==========================================================================
-    # 4. TELA DE LOGIN (Se não tiver cookie nem sessão)
+    # 4. TELA DE LOGIN
     # ==========================================================================
     st.markdown("<style>[data-testid='stSidebar'] { display: none; }</style>", unsafe_allow_html=True)
     st.markdown("<style>.block-container { padding-top: 3rem; }</style>", unsafe_allow_html=True)
@@ -179,7 +169,6 @@ def check_password():
                 with st.form("login_form"):
                     user = st.text_input("Usuário")
                     pw = st.text_input("Senha", type="password")
-                    # Checkbox marcado por padrão
                     manter_conectado = st.checkbox("Manter conectado (30 dias)", value=True)
                     
                     if st.form_submit_button("ACESSAR", type="primary", use_container_width=True):
@@ -193,22 +182,19 @@ def check_password():
                         if res:
                             senha_banco = res[1]
                             if verificar_senha(pw, senha_banco): senha_ok = True
-                            elif pw == senha_banco: senha_ok = True # Fallback
+                            elif pw == senha_banco: senha_ok = True
                         
                         if senha_ok:
-                            # 1. Atualiza Sessão Imediata
                             st.session_state["logged_in"] = True
                             st.session_state["username"] = user
                             st.session_state["user_nome"] = res[0]
                             st.session_state["force_change"] = (res[2] == 1)
                             
-                            # 2. Grava Cookie Persistente (Se marcado)
                             if manter_conectado:
                                 expires = datetime.now() + timedelta(days=30)
                                 cookie_manager.set("manutencao_user", user, expires_at=expires)
                             
                             st.success("Login realizado! Redirecionando...")
-                            # Delay essencial para garantir que o cookie seja escrito antes do reload
                             time.sleep(1.5) 
                             st.rerun()
                         else:
