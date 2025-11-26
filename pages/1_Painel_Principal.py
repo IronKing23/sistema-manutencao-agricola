@@ -97,7 +97,7 @@ data_fim_dt = datetime.combine(data_fim, datetime.max.time())
 query += " AND os.data_hora BETWEEN ? AND ?"
 params.extend([data_inicio_dt, data_fim_dt])
 
-# Ordenação por Prioridade (CASE WHEN)
+# Ordenação por Prioridade
 query += """ 
 ORDER BY 
     CASE os.prioridade
@@ -125,11 +125,9 @@ finally:
 # PROCESSAMENTO DE DADOS (GLOBAL)
 # ==============================================================================
 if not df_painel.empty:
-    # 1. Formatação de Datas e Nulos (BLINDADO)
     df_painel['Data_DT'] = pd.to_datetime(df_painel['Data'], format='mixed', dayfirst=True, errors='coerce')
     fim_dt = pd.to_datetime(df_painel['Fim'], format='mixed', dayfirst=True, errors='coerce')
     
-    # --- CÁLCULO TEMPO ABERTO ---
     agora = datetime.now(FUSO_HORARIO).replace(tzinfo=None)
     fim_calculo = fim_dt.fillna(agora)
     df_painel['delta'] = fim_calculo - df_painel['Data_DT']
@@ -139,11 +137,9 @@ if not df_painel.empty:
         try:
             total_seconds = int(td.total_seconds())
             if total_seconds < 0: return "0m"
-            
             days = total_seconds // 86400
             hours = (total_seconds % 86400) // 3600
             minutes = ((total_seconds % 86400) % 3600) // 60
-            
             parts = []
             if days > 0: parts.append(f"{days}d")
             if hours > 0: parts.append(f"{hours}h")
@@ -153,20 +149,18 @@ if not df_painel.empty:
 
     df_painel['Tempo_Aberto'] = df_painel['delta'].apply(formatar_delta)
     
-    # Formatação para String (Visualização)
     df_painel['Data'] = df_painel['Data_DT'].dt.strftime('%d/%m/%Y %H:%M').fillna("-")
     df_painel['Fim'] = fim_dt.dt.strftime('%d/%m/%Y %H:%M').fillna("-")
     
     df_painel['prioridade'] = df_painel['prioridade'].fillna("Média")
     df_painel['horimetro'] = df_painel['horimetro'].fillna(0)
 
-    # 2. CONVERSÃO PARA MAIÚSCULAS
     colunas_texto = ['frota', 'modelo', 'Gestao', 'Executante', 'status', 'OS_Oficial', 'Operacao', 'Local', 'descricao', 'prioridade']
     for col in colunas_texto:
         if col in df_painel.columns:
             df_painel[col] = df_painel[col].astype(str).str.upper().replace(['NONE', 'NAN'], '-')
 
-# --- FUNÇÕES DE ESTILO (GLOBAL) ---
+# --- FUNÇÕES DE ESTILO ---
 def hex_to_rgba(hex_code, opacity=0.25):
     if not hex_code or not isinstance(hex_code, str) or not hex_code.startswith('#'): return None 
     hex_code = hex_code.lstrip('#')
@@ -191,7 +185,6 @@ def colorir_linhas_hibrido(row):
 # ==============================================================================
 tab_lista, tab_dash = st.tabs(["📋 Detalhamento (Tabela)", "📊 Visão Geral (Dashboard)"])
 
-# Definição das colunas padrão para ambas as tabelas
 colunas_ordem = ['Ticket', 'OS_Oficial', 'frota', 'modelo', 'Gestao', 'prioridade', 'status', 'Local', 'Data', 'Tempo_Aberto', 'descricao', 'Operacao', 'Cor_Hex']
 config_tabela = {
     "Ticket": st.column_config.NumberColumn("Ticket", width="small", format="%d"),
@@ -208,18 +201,12 @@ with tab_lista:
     if df_painel.empty:
         st.info("Nenhum atendimento para listar.")
     else:
-        # Seleção e Ordem das Colunas
         cols_to_show = [c for c in colunas_ordem if c in df_painel.columns]
         df_exibicao = df_painel[cols_to_show]
 
         try:
             df_styled = df_exibicao.style.apply(colorir_linhas_hibrido, axis=1)
-            st.dataframe(
-                df_styled, 
-                use_container_width=True, 
-                hide_index=True,
-                column_config=config_tabela
-            )
+            st.dataframe(df_styled, use_container_width=True, hide_index=True, column_config=config_tabela)
         except:
             st.dataframe(df_exibicao, use_container_width=True, hide_index=True)
         
@@ -236,72 +223,120 @@ with tab_lista:
             except Exception as e: st.error(f"Erro PDF: {e}")
 
 # ------------------------------------------------------------------------------
-# ABA 2: DASHBOARD
+# ABA 2: DASHBOARD (UI/UX MODERNIZADA)
 # ------------------------------------------------------------------------------
 with tab_dash:
-    # CSS
+    # --- CSS MODERNO PARA OS CARDS ---
     st.markdown("""
     <style>
+    /* Cards KPI */
+    .kpi-card {
+        background-color: #f8f9fa;
+        border: 1px solid #e9ecef;
+        border-radius: 10px;
+        padding: 15px 20px;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+        transition: all 0.3s ease;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+    }
+    .kpi-card:hover {
+        box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        transform: translateY(-3px);
+    }
+    .kpi-icon {
+        float: right;
+        font-size: 1.8rem;
+        margin-top: -5px;
+    }
+    .kpi-title {
+        font-size: 0.9rem;
+        color: #6c757d;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        margin-bottom: 5px;
+    }
+    .kpi-value {
+        font-size: 2rem;
+        font-weight: 800;
+        color: #212529;
+    }
+    
+    /* Adaptação Dark Mode */
+    @media (prefers-color-scheme: dark) {
+        .kpi-card {
+            background-color: #262730;
+            border-color: #3f3f46;
+        }
+        .kpi-title { color: #a1a1aa; }
+        .kpi-value { color: #f4f4f5; }
+    }
+    
+    /* Badge Pulsante */
     @keyframes pulse-red {
         0% { box-shadow: 0 0 0 0 rgba(255, 82, 82, 0.7); }
         70% { box-shadow: 0 0 0 10px rgba(255, 82, 82, 0); }
         100% { box-shadow: 0 0 0 0 rgba(255, 82, 82, 0); }
     }
     .badge-pulse {
-        background-color: #FF5252; color: white; 
-        padding: 4px 10px; border-radius: 12px; font-size: 0.8em; font-weight: bold;
-        animation: pulse-red 2s infinite; display: inline-block;
-    }
-    div.stButton > button[kind="primary"] {
-        background-color: #2196F3; color: white; border: none; font-weight: bold;
-        transition: all 0.2s ease;
-    }
-    div.stButton > button[kind="primary"]:hover {
-        background-color: #1976D2; transform: scale(1.02);
+        background-color: #EF4444; 
+        color: white; 
+        padding: 4px 10px; 
+        border-radius: 12px; 
+        font-size: 0.75em; 
+        font-weight: bold;
+        animation: pulse-red 2s infinite;
+        display: inline-block;
+        margin-top: 5px;
     }
     </style>
     """, unsafe_allow_html=True)
+
+    # Função auxiliar para desenhar o card
+    def exibir_card(col, titulo, valor, icone, cor_borda, is_urgente=False):
+        # HTML do Card
+        html_content = f"""
+        <div class="kpi-card" style="border-left: 5px solid {cor_borda};">
+            <div>
+                <div class="kpi-title">{titulo} <span class="kpi-icon">{icone}</span></div>
+                <div class="kpi-value">{valor}</div>
+            </div>
+            {f'<div class="badge-pulse">⚠️ AÇÃO NECESSÁRIA</div>' if is_urgente and valor > 0 else ''}
+        </div>
+        """
+        col.markdown(html_content, unsafe_allow_html=True)
 
     if df_painel.empty:
         st.warning("Sem dados.")
     else:
         col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
+        
         total = len(df_painel)
         urgentes = len(df_painel[df_painel['prioridade'].astype(str).str.upper() == 'ALTA'])
         pendentes = len(df_painel[df_painel['status'].astype(str).str.upper() != 'CONCLUÍDO'])
         frotas_afetadas = df_painel[df_painel['status'].astype(str).str.upper() != 'CONCLUÍDO']['frota'].nunique()
         
-        col_kpi1.metric("Total", total)
+        # --- RENDERIZAÇÃO DOS CARDS MODERNOS ---
+        exibir_card(col_kpi1, "Total de Ordens", total, "📋", "#3B82F6") # Azul
         
+        # Card de Alta Prioridade com Lógica Especial (Botão Fora do HTML)
         with col_kpi2:
+            exibir_card(col_kpi2, "Alta Prioridade", urgentes, "🔥", "#EF4444", is_urgente=True)
             if urgentes > 0:
-                lista_frotas = sorted(df_painel[df_painel['prioridade'].astype(str).str.upper() == 'ALTA']['frota'].astype(str).unique())
-                tooltip_text = "⚠️ FROTAS CRÍTICAS (ALTA):&#10;" + "&#10;".join(lista_frotas)
-                st.markdown(f"""
-                <div style="text-align:center; cursor: help;" title="{tooltip_text}">
-                    <p style="margin:0; color:#666; font-size:0.9rem;">Alta Prioridade</p>
-                    <p style="margin:0; font-size:2rem; font-weight:bold;">{urgentes}</p>
-                    <span class="badge-pulse">⚠️ AÇÃO</span>
-                </div>
-                """, unsafe_allow_html=True)
-                st.write("")
-                if st.button("👁️ Ver", key="btn_crit", type="primary", use_container_width=True):
+                if st.button("👁️ Ver Frotas", key="btn_crit_dash", use_container_width=True):
                     st.session_state['show_criticos'] = not st.session_state.get('show_criticos', False)
-            else:
-                st.metric("Alta Prioridade", 0)
 
-        col_kpi3.metric("Em Aberto", pendentes)
-        col_kpi4.metric("Frotas Afetadas", frotas_afetadas)
+        exibir_card(col_kpi3, "Em Aberto", pendentes, "⏳", "#F59E0B") # Laranja
+        exibir_card(col_kpi4, "Frotas Paradas", frotas_afetadas, "🚜", "#10B981") # Verde
         
-        # --- TABELA DE FROTAS CRÍTICAS (ATUALIZADA) ---
+        # --- TABELA DE FROTAS CRÍTICAS ---
         if st.session_state.get('show_criticos') and urgentes > 0:
             st.markdown("---")
             st.markdown("### 🚨 Frotas Críticas (Prioridade Alta)")
-            
-            # Filtra apenas Alta Prioridade
             df_show = df_painel[df_painel['prioridade'].astype(str).str.upper() == 'ALTA'].copy()
-            
-            # Usa as mesmas colunas da aba de detalhamento
             cols_c = [c for c in colunas_ordem if c in df_show.columns]
             
             try:
@@ -309,12 +344,11 @@ with tab_dash:
                     df_show[cols_c].style.apply(colorir_linhas_hibrido, axis=1),
                     use_container_width=True, 
                     hide_index=True, 
-                    column_config=config_tabela # Mesma config da tabela principal
+                    column_config=config_tabela
                 )
-            except: 
-                st.dataframe(df_show[cols_c], use_container_width=True)
+            except: st.dataframe(df_show[cols_c], use_container_width=True)
             
-            if st.button("Fechar"): st.session_state['show_criticos'] = False; st.rerun()
+            if st.button("Fechar Lista"): st.session_state['show_criticos'] = False; st.rerun()
             st.markdown("---")
 
         st.divider()
