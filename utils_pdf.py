@@ -194,15 +194,17 @@ def gerar_relatorio_geral(df):
     return bytes(pdf.output(dest='S'))
 
 # --- 3. Prontuário da Máquina (ATUALIZADO COM CORES E GRÁFICO) ---
-def gerar_prontuario_maquina(frota_nome, df_historico, kpis):
+def gerar_prontuario_maquina(frota_nome, df_historico, kpis, gestor=""):
     pdf = PDF()
     pdf.add_page()
     
-    # --- TÍTULO ---
-    pdf.set_font('Helvetica', 'B', 18)
+    # --- TÍTULO E GESTOR ---
+    pdf.set_font('Helvetica', 'B', 16)
     pdf.cell(0, 10, f"PRONTUÁRIO: {frota_nome}", 0, 1, 'C')
+    
     pdf.set_font('Helvetica', '', 10)
-    pdf.cell(0, 6, f"Gerado em {datetime.now().strftime('%d/%m/%Y')}", 0, 1, 'C')
+    texto_sub = f"Gerado em {datetime.now().strftime('%d/%m/%Y')} | Gestor Resp.: {gestor}"
+    pdf.cell(0, 6, texto_sub, 0, 1, 'C')
     pdf.ln(5)
     
     # --- KPIs ---
@@ -219,11 +221,61 @@ def gerar_prontuario_maquina(frota_nome, df_historico, kpis):
         pdf.cell(col_w, 8, str(v), 0, 0, 'C')
         
     y = pdf.get_y()
-    kpi("TOTAL", kpis['total'], 10)
-    pdf.set_y(y); kpi("DEFEITO", kpis['comum'], 10+col_w)
-    pdf.set_y(y); kpi("TEMPO", kpis['tempo'], 10+col_w*2)
-    pdf.set_y(y); kpi("ÚLTIMA", kpis['ultima_data'], 10+col_w*3)
-    pdf.ln(20)
+    kpi("INTERVENÇÕES", kpis['total'], 10)
+    pdf.set_y(y); kpi("FALHAS (CORRETIVA)", kpis.get('falhas', 0), 10+col_w)
+    pdf.set_y(y); kpi("TEMPO PARADO", kpis['tempo'], 10+col_w*2)
+    pdf.set_y(y); kpi("ÚLTIMA DATA", kpis['ultima_data'], 10+col_w*3)
+    pdf.ln(25)
+
+    # --- TABELA DETALHADA ---
+    pdf.set_font('Helvetica', 'B', 11)
+    pdf.cell(0, 8, "HISTÓRICO DE MANUTENÇÕES", 0, 1, 'L')
+    
+    cols = [("Data", 25), ("Tipo", 30), ("Status", 25), ("Ticket", 15), ("Detalhes & Descrição", 95)]
+    pdf.set_fill_color(50, 50, 50); pdf.set_text_color(255); pdf.set_font('Helvetica', 'B', 8)
+    for n, w in cols: pdf.cell(w, 7, n, 1, 0, 'C', True)
+    pdf.ln(); pdf.set_text_color(0); pdf.set_font('Helvetica', '', 8)
+    
+    for _, row in df_historico.iterrows():
+        rgb_cor = obter_cor_linha(row)
+        pdf.set_fill_color(*rgb_cor)
+        
+        # Monta um cabeçalho rico para a descrição
+        solic = str(row.get('Solicitante', '')) or 'N/A'
+        classe = str(row.get('classificacao', ''))
+        parada = "SIM" if row.get('maquina_parada') == 1 else "NÃO"
+        
+        # Texto combinado
+        info_extra = f"SOLIC.: {solic} | CLASSE: {classe} | PAROU: {parada}"
+        desc_completa = f"{info_extra}\nDESCRIÇÃO: {str(row.get('Descricao', ''))}"
+        
+        # Calcula altura
+        lines = pdf.multi_cell(95, 4, desc_completa, split_only=True)
+        h = max(len(lines)*4 + 2, 8)
+        
+        if pdf.get_y() + h > 275:
+            pdf.add_page()
+            pdf.set_fill_color(50, 50, 50); pdf.set_text_color(255); pdf.set_font('Helvetica', 'B', 8)
+            for n, w in cols: pdf.cell(w, 7, n, 1, 0, 'C', True)
+            pdf.ln(); pdf.set_text_color(0); pdf.set_font('Helvetica', '', 8)
+            pdf.set_fill_color(*rgb_cor)
+
+        x = pdf.get_x(); y = pdf.get_y()
+        pdf.rect(x, y, 190, h, 'F')
+        
+        dt = formatar_data_segura(row.get('Data')).split(' ')[0]
+        
+        pdf.cell(25, h, dt, 1, 0, 'C', False)
+        pdf.cell(30, h, str(row.get('Operacao', ''))[:15], 1, 0, 'C', False)
+        pdf.cell(25, h, str(row.get('Status', '')), 1, 0, 'C', False)
+        pdf.cell(15, h, str(row.get('Ticket', '')), 1, 0, 'C', False)
+        
+        pdf.set_xy(x + 95, y + 1)
+        pdf.multi_cell(95, 4, desc_completa, 0, 'L', False)
+        
+        pdf.set_xy(10, y + h)
+
+    return bytes(pdf.output(dest='S'))
 
     # --- GRÁFICO DE BARRAS COLORIDO (NOVO) ---
     if not df_historico.empty:

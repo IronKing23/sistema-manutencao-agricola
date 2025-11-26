@@ -4,7 +4,7 @@ import plotly.express as px
 from database import get_db_connection
 from datetime import datetime, timedelta
 from utils_pdf import gerar_relatorio_geral
-import pytz # Importante para corrigir o fuso horário
+import pytz 
 
 # --- Configuração Inicial ---
 st.title("🖥️ Painel de Controle de Manutenção Agrícola")
@@ -122,9 +122,84 @@ finally:
     if conn: conn.close()
 
 # ==============================================================================
+# PROCESSAMENTO DE DADOS (GLOBAL)
+# ==============================================================================
+if not df_painel.empty:
+    # 1. Formatação de Datas e Nulos (BLINDADO)
+    df_painel['Data_DT'] = pd.to_datetime(df_painel['Data'], format='mixed', dayfirst=True, errors='coerce')
+    fim_dt = pd.to_datetime(df_painel['Fim'], format='mixed', dayfirst=True, errors='coerce')
+    
+    # --- CÁLCULO TEMPO ABERTO ---
+    agora = datetime.now(FUSO_HORARIO).replace(tzinfo=None)
+    fim_calculo = fim_dt.fillna(agora)
+    df_painel['delta'] = fim_calculo - df_painel['Data_DT']
+    
+    def formatar_delta(td):
+        if pd.isnull(td): return "-"
+        try:
+            total_seconds = int(td.total_seconds())
+            if total_seconds < 0: return "0m"
+            
+            days = total_seconds // 86400
+            hours = (total_seconds % 86400) // 3600
+            minutes = ((total_seconds % 86400) % 3600) // 60
+            
+            parts = []
+            if days > 0: parts.append(f"{days}d")
+            if hours > 0: parts.append(f"{hours}h")
+            if minutes > 0: parts.append(f"{minutes}m")
+            return " ".join(parts) if parts else "< 1m"
+        except: return "-"
+
+    df_painel['Tempo_Aberto'] = df_painel['delta'].apply(formatar_delta)
+    
+    # Formatação para String (Visualização)
+    df_painel['Data'] = df_painel['Data_DT'].dt.strftime('%d/%m/%Y %H:%M').fillna("-")
+    df_painel['Fim'] = fim_dt.dt.strftime('%d/%m/%Y %H:%M').fillna("-")
+    
+    df_painel['prioridade'] = df_painel['prioridade'].fillna("Média")
+    df_painel['horimetro'] = df_painel['horimetro'].fillna(0)
+
+    # 2. CONVERSÃO PARA MAIÚSCULAS
+    colunas_texto = ['frota', 'modelo', 'Gestao', 'Executante', 'status', 'OS_Oficial', 'Operacao', 'Local', 'descricao', 'prioridade']
+    for col in colunas_texto:
+        if col in df_painel.columns:
+            df_painel[col] = df_painel[col].astype(str).str.upper().replace(['NONE', 'NAN'], '-')
+
+# --- FUNÇÕES DE ESTILO (GLOBAL) ---
+def hex_to_rgba(hex_code, opacity=0.25):
+    if not hex_code or not isinstance(hex_code, str) or not hex_code.startswith('#'): return None 
+    hex_code = hex_code.lstrip('#')
+    try:
+        rgb = tuple(int(hex_code[i:i+2], 16) for i in (0, 2, 4))
+        return f'rgba({rgb[0]}, {rgb[1]}, {rgb[2]}, {opacity})'
+    except: return None
+
+def colorir_linhas_hibrido(row):
+    operacao = str(row['Operacao']).lower()
+    cor_db = row.get('Cor_Hex')
+    cor_final = hex_to_rgba(cor_db, opacity=0.25)
+    if not cor_final:
+        if 'elet' in operacao: cor_final = 'rgba(33, 150, 243, 0.25)'
+        elif 'mecan' in operacao: cor_final = 'rgba(158, 158, 158, 0.25)'
+        elif 'borrach' in operacao: cor_final = 'rgba(255, 152, 0, 0.25)'   
+        else: cor_final = 'transparent'
+    return [f'background-color: {cor_final}' for _ in row]
+
+# ==============================================================================
 # VISUALIZAÇÃO
 # ==============================================================================
 tab_lista, tab_dash = st.tabs(["📋 Detalhamento (Tabela)", "📊 Visão Geral (Dashboard)"])
+
+# Definição das colunas padrão para ambas as tabelas
+colunas_ordem = ['Ticket', 'OS_Oficial', 'frota', 'modelo', 'Gestao', 'prioridade', 'status', 'Local', 'Data', 'Tempo_Aberto', 'descricao', 'Operacao', 'Cor_Hex']
+config_tabela = {
+    "Ticket": st.column_config.NumberColumn("Ticket", width="small", format="%d"),
+    "OS_Oficial": st.column_config.TextColumn("OS Oficial", width="small"),
+    "Tempo_Aberto": st.column_config.TextColumn("Tempo", width="small", help="Tempo decorrido"),
+    "Gestao": st.column_config.TextColumn("Gestão Resp.", width="medium"),
+    "Cor_Hex": None 
+}
 
 # ------------------------------------------------------------------------------
 # ABA 1: TABELA DETALHADA
@@ -133,75 +208,9 @@ with tab_lista:
     if df_painel.empty:
         st.info("Nenhum atendimento para listar.")
     else:
-        # 1. Formatação de Datas e Nulos (BLINDADO)
-        df_painel['Data_DT'] = pd.to_datetime(df_painel['Data'], format='mixed', dayfirst=True, errors='coerce')
-        fim_dt = pd.to_datetime(df_painel['Fim'], format='mixed', dayfirst=True, errors='coerce')
-        
-        # --- CÁLCULO TEMPO ABERTO CORRIGIDO ---
-        # Pega o 'agora' no fuso horário correto (MS)
-        # .replace(tzinfo=None) remove a info de fuso para fazer conta com a data 'naive' do banco
-        agora = datetime.now(FUSO_HORARIO).replace(tzinfo=None)
-        
-        fim_calculo = fim_dt.fillna(agora)
-        df_painel['delta'] = fim_calculo - df_painel['Data_DT']
-        
-        def formatar_delta(td):
-            if pd.isnull(td): return "-"
-            try:
-                total_seconds = int(td.total_seconds())
-                # Se der negativo (por erro de fuso ou relógio desajustado), retorna 0m
-                if total_seconds < 0: return "0m"
-                
-                days = total_seconds // 86400
-                hours = (total_seconds % 86400) // 3600
-                minutes = ((total_seconds % 86400) % 3600) // 60
-                
-                parts = []
-                if days > 0: parts.append(f"{days}d")
-                if hours > 0: parts.append(f"{hours}h")
-                if minutes > 0: parts.append(f"{minutes}m")
-                return " ".join(parts) if parts else "< 1m"
-            except: return "-"
-
-        df_painel['Tempo_Aberto'] = df_painel['delta'].apply(formatar_delta)
-        
-        # Formatação para String (Visualização)
-        df_painel['Data'] = df_painel['Data_DT'].dt.strftime('%d/%m/%Y %H:%M').fillna("-")
-        df_painel['Fim'] = fim_dt.dt.strftime('%d/%m/%Y %H:%M').fillna("-")
-        
-        df_painel['prioridade'] = df_painel['prioridade'].fillna("Média")
-        df_painel['horimetro'] = df_painel['horimetro'].fillna(0)
-
-        # 2. CONVERSÃO PARA MAIÚSCULAS
-        colunas_texto = ['frota', 'modelo', 'Gestao', 'Executante', 'status', 'OS_Oficial', 'Operacao', 'Local', 'descricao', 'prioridade']
-        for col in colunas_texto:
-            if col in df_painel.columns:
-                df_painel[col] = df_painel[col].astype(str).str.upper().replace(['NONE', 'NAN'], '-')
-
-        # 3. Seleção e Ordem das Colunas
-        colunas_ordem = ['Ticket', 'OS_Oficial', 'frota', 'modelo', 'prioridade', 'status', 'Local', 'Data', 'Tempo_Aberto', 'descricao', 'Operacao', 'Cor_Hex']
+        # Seleção e Ordem das Colunas
         cols_to_show = [c for c in colunas_ordem if c in df_painel.columns]
         df_exibicao = df_painel[cols_to_show]
-
-        # --- Lógica de Cores ---
-        def hex_to_rgba(hex_code, opacity=0.25):
-            if not hex_code or not isinstance(hex_code, str) or not hex_code.startswith('#'): return None 
-            hex_code = hex_code.lstrip('#')
-            try:
-                rgb = tuple(int(hex_code[i:i+2], 16) for i in (0, 2, 4))
-                return f'rgba({rgb[0]}, {rgb[1]}, {rgb[2]}, {opacity})'
-            except: return None
-
-        def colorir_linhas_hibrido(row):
-            operacao = str(row['Operacao']).lower()
-            cor_db = row.get('Cor_Hex')
-            cor_final = hex_to_rgba(cor_db, opacity=0.25)
-            if not cor_final:
-                if 'elet' in operacao: cor_final = 'rgba(33, 150, 243, 0.25)'
-                elif 'mecan' in operacao: cor_final = 'rgba(158, 158, 158, 0.25)'
-                elif 'borrach' in operacao: cor_final = 'rgba(255, 152, 0, 0.25)'   
-                else: cor_final = 'transparent'
-            return [f'background-color: {cor_final}' for _ in row]
 
         try:
             df_styled = df_exibicao.style.apply(colorir_linhas_hibrido, axis=1)
@@ -209,12 +218,7 @@ with tab_lista:
                 df_styled, 
                 use_container_width=True, 
                 hide_index=True,
-                column_config={
-                    "Ticket": st.column_config.NumberColumn("Ticket", width="small", format="%d"),
-                    "OS_Oficial": st.column_config.TextColumn("OS Oficial", width="small"),
-                    "Tempo_Aberto": st.column_config.TextColumn("Tempo", width="small", help="Tempo decorrido"),
-                    "Cor_Hex": None 
-                }
+                column_config=config_tabela
             )
         except:
             st.dataframe(df_exibicao, use_container_width=True, hide_index=True)
@@ -289,19 +293,26 @@ with tab_dash:
         col_kpi3.metric("Em Aberto", pendentes)
         col_kpi4.metric("Frotas Afetadas", frotas_afetadas)
         
+        # --- TABELA DE FROTAS CRÍTICAS (ATUALIZADA) ---
         if st.session_state.get('show_criticos') and urgentes > 0:
             st.markdown("---")
-            st.markdown("### 🚨 Frotas Críticas")
+            st.markdown("### 🚨 Frotas Críticas (Prioridade Alta)")
+            
+            # Filtra apenas Alta Prioridade
             df_show = df_painel[df_painel['prioridade'].astype(str).str.upper() == 'ALTA'].copy()
-            cols_c = ['Ticket', 'frota', 'modelo', 'Local', 'Operacao', 'descricao', 'Data', 'Cor_Hex']
-            cols_c = [c for c in cols_c if c in df_show.columns]
+            
+            # Usa as mesmas colunas da aba de detalhamento
+            cols_c = [c for c in colunas_ordem if c in df_show.columns]
             
             try:
                 st.dataframe(
                     df_show[cols_c].style.apply(colorir_linhas_hibrido, axis=1),
-                    use_container_width=True, hide_index=True, column_config={"Cor_Hex": None}
+                    use_container_width=True, 
+                    hide_index=True, 
+                    column_config=config_tabela # Mesma config da tabela principal
                 )
-            except: st.dataframe(df_show[cols_c], use_container_width=True)
+            except: 
+                st.dataframe(df_show[cols_c], use_container_width=True)
             
             if st.button("Fechar"): st.session_state['show_criticos'] = False; st.rerun()
             st.markdown("---")

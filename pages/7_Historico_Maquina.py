@@ -1,6 +1,12 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import sys
+import os
+
+# --- BLINDAGEM DE IMPORTAÇÃO ---
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from database import get_db_connection
 from datetime import datetime, timedelta
 from utils_pdf import gerar_prontuario_maquina
@@ -8,7 +14,7 @@ from utils_pdf import gerar_prontuario_maquina
 st.set_page_config(layout="wide", page_title="Histórico da Máquina")
 st.title("🚜 Prontuário / Histórico da Máquina")
 
-# --- FILTROS ---
+# --- FILTROS (SIDEBAR) ---
 st.sidebar.header("Filtros de Período")
 try:
     dt_inicio = st.sidebar.date_input("De:", datetime.now() - timedelta(days=365)) 
@@ -31,7 +37,8 @@ def formatar_duracao(td):
 
 def carregar_frotas():
     conn = get_db_connection()
-    frotas = pd.read_sql_query("SELECT id, frota, modelo FROM equipamentos ORDER BY frota", conn)
+    # Busca também o gestor e modelo
+    frotas = pd.read_sql_query("SELECT id, frota, modelo, gestao_responsavel FROM equipamentos ORDER BY frota", conn)
     conn.close()
     frotas['display'] = frotas['frota'] + " - " + frotas['modelo']
     return frotas
@@ -42,6 +49,7 @@ def carregar_historico_frota(equipamento_id, d_inicio, d_fim):
         d_inicio_str = d_inicio.strftime('%Y-%m-%d 00:00:00')
         d_fim_str = d_fim.strftime('%Y-%m-%d 23:59:59')
         
+        # Query atualizada com JOIN para Solicitante e campos KPI
         query = """
         SELECT 
             os.id as Ticket,
@@ -53,10 +61,14 @@ def carregar_historico_frota(equipamento_id, d_inicio, d_fim):
             os.status as Status,
             os.numero_os_oficial as OS_Oficial,
             os.descricao as Descricao,
-            f.nome as Executante
+            os.classificacao,
+            os.maquina_parada,
+            f.nome as Executante,
+            s.nome as Solicitante
         FROM ordens_servico os
         JOIN tipos_operacao op ON os.tipo_operacao_id = op.id
         LEFT JOIN funcionarios f ON os.funcionario_id = f.id
+        LEFT JOIN funcionarios s ON os.solicitante_id = s.id
         WHERE os.equipamento_id = ? AND os.data_hora BETWEEN ? AND ?
         ORDER BY os.data_hora DESC
         """
@@ -71,13 +83,25 @@ def carregar_historico_frota(equipamento_id, d_inicio, d_fim):
 # --- Lógica da Interface ---
 frotas_df = carregar_frotas()
 
-col_sel1, col_sel2 = st.columns([1, 2])
+# Seleção da Frota
+col_sel1, col_sel2 = st.columns([1.5, 2.5])
 with col_sel1:
     frota_selecionada = st.selectbox("Selecione a Máquina:", options=frotas_df['display'], index=None)
 
 if frota_selecionada:
-    id_frota = frotas_df[frotas_df['display'] == frota_selecionada]['id'].values[0]
-    
+    # Dados da Frota Selecionada
+    row_frota = frotas_df[frotas_df['display'] == frota_selecionada].iloc[0]
+    id_frota = row_frota['id']
+    gestor_frota = row_frota['gestao_responsavel'] if row_frota['gestao_responsavel'] else "Não Definido"
+    modelo_frota = row_frota['modelo']
+
+    # Header Informativo
+    with st.container(border=True):
+        c_head1, c_head2, c_head3 = st.columns([1, 2, 1])
+        c_head1.markdown(f"**Frota:** {row_frota['frota']}")
+        c_head2.markdown(f"**Modelo:** {modelo_frota}")
+        c_head3.markdown(f"**Gestão:** {gestor_frota}")
+
     historico_df = carregar_historico_frota(int(id_frota), dt_inicio, dt_fim)
     
     st.divider()
@@ -85,38 +109,47 @@ if frota_selecionada:
     if historico_df.empty:
         st.warning(f"Nenhum registro encontrado para **{frota_selecionada}** neste período.")
     else:
-        # --- CORREÇÃO DE DATAS AQUI (Blindagem) ---
-        # Adicionado format='mixed' e dayfirst=True para aceitar qualquer formato do banco
+        # --- TRATAMENTO DE DADOS ---
         historico_df['Data_DT'] = pd.to_datetime(historico_df['Data'], format='mixed', dayfirst=True, errors='coerce')
         historico_df['Fim_DT'] = pd.to_datetime(historico_df['Fim'], format='mixed', dayfirst=True, errors='coerce')
         
-        # Cálculos
+        # Duração
         historico_df['Duracao_Obj'] = historico_df['Fim_DT'] - historico_df['Data_DT']
         historico_df['Duração'] = historico_df['Duracao_Obj'].apply(formatar_duracao)
         
-        # Formatação para Exibição
+        # Formatação
         historico_df['Data_Fmt'] = historico_df['Data_DT'].dt.strftime('%d/%m/%Y %H:%M').fillna("-")
-        
-        # Tratamento de Nulos
         historico_df['horimetro'] = historico_df['horimetro'].fillna(0)
-
-        # KPIs
-        total_ops = len(historico_df)
-        comum = historico_df['Operacao'].mode()[0] if not historico_df.empty else "-"
         
-        # Tempo total (ignora NaT)
-        tempo_total = historico_df['Duracao_Obj'].sum(numeric_only=False)
+        # Novos Campos (Preenchimento Default)
+        if 'classificacao' not in historico_df.columns: historico_df['classificacao'] = 'Corretiva'
+        if 'maquina_parada' not in historico_df.columns: historico_df['maquina_parada'] = 1
+        
+        historico_df['classificacao'] = historico_df['classificacao'].fillna('Corretiva')
+        historico_df['maquina_parada'] = historico_df['maquina_parada'].fillna(1).astype(bool) # Bool para Checkbox
+
+        # --- KPIs ---
+        total_ops = len(historico_df)
+        
+        # Filtra falhas (Corretivas)
+        df_falhas = historico_df[historico_df['classificacao'].str.contains('Corretiva', case=False, na=False)]
+        total_falhas = len(df_falhas)
+        
+        # Tempo parado (Soma das durações onde houve parada)
+        df_parado = historico_df[historico_df['maquina_parada'] == True]
+        tempo_total = df_parado['Duracao_Obj'].sum(numeric_only=False)
         tempo_str = formatar_duracao(tempo_total)
         
+        comum = historico_df['Operacao'].mode()[0] if not historico_df.empty else "-"
         try: ult_data = historico_df['Data_Fmt'].iloc[0]
         except: ult_data = "-"
 
         # Exibe KPIs
         k1, k2, k3, k4 = st.columns(4)
-        k1.metric("Intervenções", total_ops)
-        k2.metric("Defeito + Comum", comum)
-        k3.metric("Tempo Parado", tempo_str)
-        k4.metric("Última Data", ult_data)
+        k1.metric("Total Intervenções", total_ops)
+        k2.metric("Falhas (Quebras)", total_falhas, help="Classificadas como 'Corretiva'")
+        k3.metric("Tempo Total Parado", tempo_str, help="Soma da duração onde Máquina Parada = Sim")
+        k4.metric("Última Intervenção", ult_data)
         
         st.divider()
 
@@ -138,34 +171,61 @@ if frota_selecionada:
             st.plotly_chart(fig, use_container_width=True)
             
         with c_graf2:
-            st.markdown("##### Evolução do Horímetro")
-            df_line = historico_df[historico_df['horimetro'] > 0].sort_values('Data_DT')
-            if not df_line.empty:
-                fig_line = px.line(df_line, x='Data_DT', y='horimetro', markers=True)
-                st.plotly_chart(fig_line, use_container_width=True)
-            else:
-                st.info("Sem dados de horímetro para gráfico.")
+            st.markdown("##### Cronologia (Classificação)")
+            # Gráfico de Pizza ou Barra empilhada de Classificação
+            df_class = historico_df['classificacao'].value_counts().reset_index()
+            df_class.columns = ['Classe', 'Qtd']
+            fig_pie = px.pie(df_class, names='Classe', values='Qtd', hole=0.4, color_discrete_sequence=px.colors.qualitative.Pastel)
+            st.plotly_chart(fig_pie, use_container_width=True)
 
-        # --- TABELA DETALHADA ---
-        with st.expander("📋 Visualizar Tabela Detalhada", expanded=True):
-            st.dataframe(
-                historico_df[['Ticket', 'Data_Fmt', 'Operacao', 'Status', 'Duração', 'horimetro', 'Descricao']],
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                     "horimetro": st.column_config.NumberColumn("Horímetro", format="%.1f h")
-                }
-            )
+        # --- TABELA DETALHADA RICA ---
+        st.subheader("📋 Registro Detalhado")
+        
+        st.dataframe(
+            historico_df,
+            use_container_width=True,
+            hide_index=True,
+            column_order=[
+                "Ticket", "Data_Fmt", "classificacao", "maquina_parada", 
+                "Operacao", "Solicitante", "Executante", "Status", "Duração", "Descricao"
+            ],
+            column_config={
+                "Ticket": st.column_config.NumberColumn("#", width="small", format="%d"),
+                "Data_Fmt": st.column_config.TextColumn("Data", width="medium"),
+                "classificacao": st.column_config.TextColumn(
+                    "Tipo Int.", 
+                    width="small",
+                    help="Preventiva vs Corretiva"
+                ),
+                "maquina_parada": st.column_config.CheckboxColumn(
+                    "Parou?",
+                    width="small",
+                ),
+                "Operacao": st.column_config.TextColumn("Serviço", width="medium"),
+                "Solicitante": st.column_config.TextColumn("Solicitante", width="medium"),
+                "Executante": st.column_config.TextColumn("Mecânico", width="medium"),
+                "Duração": st.column_config.TextColumn("Tempo", width="small"),
+                "Descricao": st.column_config.TextColumn("Descrição", width="large"),
+            }
+        )
 
         # --- BOTÃO DE DOWNLOAD DO PDF ---
         st.markdown("---")
         col_btn, col_info = st.columns([1, 3])
         
         with col_btn:
-            kpis = {'total': total_ops, 'comum': comum, 'tempo': tempo_str, 'ultima_data': ult_data}
+            # Prepara dados resumidos para o PDF
+            kpis_pdf = {
+                'total': total_ops, 
+                'comum': comum, 
+                'tempo': tempo_str, 
+                'ultima_data': ult_data,
+                'falhas': total_falhas
+            }
             
             try:
-                pdf_bytes = gerar_prontuario_maquina(frota_selecionada, historico_df, kpis)
+                # Passa também o gestor para o PDF
+                pdf_bytes = gerar_prontuario_maquina(frota_selecionada, historico_df, kpis_pdf, gestor=gestor_frota)
                 
                 st.download_button(
                     label="🖨️ Baixar Prontuário (PDF)",
@@ -179,7 +239,7 @@ if frota_selecionada:
                 st.error(f"Erro ao gerar PDF: {e}")
         
         with col_info:
-            st.info("O PDF contém o resumo, os KPIs, um gráfico simplificado e a lista completa de manutenções deste período.")
+            st.info("O PDF inclui agora os dados de Solicitante, Classificação e Status de Parada.")
 
 else:
-    st.info("Selecione uma frota para ver o dossiê.")
+    st.info("Selecione uma frota para ver o dossiê completo.")

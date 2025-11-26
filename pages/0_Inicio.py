@@ -2,14 +2,16 @@ import streamlit as st
 import pandas as pd
 from database import get_db_connection
 
-# --- Função para buscar resumo rápido (MANTIDA) ---
+# --- Função para buscar resumo rápido (ATUALIZADA) ---
 def carregar_resumo_rapido():
     conn = get_db_connection()
     try:
+        # Adicionado 'e.gestao_responsavel as Gestao' na query
         query = """
         SELECT 
             os.id as Ticket,
             e.frota as Frota,
+            e.gestao_responsavel as Gestao,
             os.status as Status,
             os.prioridade as Prioridade,
             op.nome as Operacao,
@@ -68,7 +70,7 @@ def colorir_linhas(row):
         else: cor_final = 'transparent'
     return [f'background-color: {cor_final}' for _ in row]
 
-# --- ESTILOS CSS PARA ANIMAÇÃO (NOVO!) ---
+# --- ESTILOS CSS PARA ANIMAÇÃO (MANTIDO) ---
 st.markdown("""
 <style>
 @keyframes pulse {
@@ -113,30 +115,24 @@ with col_texto:
     
     st.markdown("") 
     
-    # --- WIDGET DE AVISOS (MODERNO E PERMANENTE) ---
+    # --- WIDGET DE AVISOS ---
     qtd_recados = contar_recados()
     
-    # Define o visual dinâmico do container
     if qtd_recados > 0:
-        # Com Recados: Borda Vermelha e Badge Pulsante
         with st.container(border=True):
             c1, c2, c3 = st.columns([0.5, 4, 1.5])
-            with c1:
-                st.markdown("## 🔔") # Sino
+            with c1: st.markdown("## 🔔") 
             with c2:
-                # HTML personalizado para injetar a animação
                 st.markdown(f"**Mural de Avisos** <span class='notification-badge'>{qtd_recados} NOVOS</span>", unsafe_allow_html=True)
                 st.caption("Há mensagens pendentes de leitura ou ação.")
             with c3:
-                st.write("") # Espaço para alinhar botão
+                st.write("") 
                 if st.button("Ler Recados", type="primary", use_container_width=True):
                     st.switch_page("pages/11_Quadro_Avisos.py")
     else:
-        # Sem Recados: Visual Clean/Neutro
         with st.container(border=True):
             c1, c2, c3 = st.columns([0.5, 4, 1.5])
-            with c1:
-                st.markdown("## 📌") # Pin
+            with c1: st.markdown("## 📌") 
             with c2:
                 st.markdown(f"**Mural de Avisos** <span class='clean-badge'>0</span>", unsafe_allow_html=True)
                 st.caption("Nenhuma pendência no quadro. Tudo tranquilo!")
@@ -145,7 +141,6 @@ with col_texto:
                 if st.button("Acessar", use_container_width=True):
                     st.switch_page("pages/11_Quadro_Avisos.py")
     
-    # Resumo Tabela (Apenas info de texto)
     st.markdown("")
     df_resumo = carregar_resumo_rapido()
     qtd_aberta = len(df_resumo)
@@ -154,7 +149,7 @@ with col_texto:
     else:
         st.success("✅ Tudo limpo! Nenhuma pendência no momento.")
 
-# >> LADO DIREITO (Tabela Colorida Mantida) <<
+# >> LADO DIREITO (TABELA ATUALIZADA) <<
 with col_painel:
     with st.container(border=True):
         st.markdown("##### 🚨 Em Aberto (Prioritários)")
@@ -174,6 +169,7 @@ with col_painel:
                     column_config={
                         "Ticket": st.column_config.NumberColumn("TICKET", width="small", format="%d"),
                         "Frota": st.column_config.TextColumn("Frota", width="small"),
+                        "Gestao": st.column_config.TextColumn("Gestão", width="small"), # NOVA COLUNA
                         "Operacao": st.column_config.TextColumn("Tipo", width="small"),
                         "Status": st.column_config.TextColumn("Status", width="small"),
                         "Prioridade": st.column_config.TextColumn("Prio.", width="small"),

@@ -7,7 +7,7 @@ import sys
 import os
 import pytz 
 
-# --- CONFIGURAÇÃO DE CAMINHO ---
+# --- BLINDAGEM DE IMPORTAÇÃO ---
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from utils_pdf import gerar_relatorio_os 
@@ -27,11 +27,14 @@ def carregar_operacoes():
 
 def carregar_funcionarios():
     conn = get_db_connection()
-    funcs = pd.read_sql_query("SELECT id, nome FROM funcionarios ORDER BY nome", conn)
+    funcs = pd.read_sql_query("SELECT id, nome, matricula, setor FROM funcionarios ORDER BY nome", conn)
     conn.close()
+    if not funcs.empty:
+        funcs['display'] = funcs['nome'] + " (" + funcs['matricula'].astype(str) + ")"
+    else:
+        funcs['display'] = []
     return funcs
 
-# NOVA FUNÇÃO: Carregar Áreas
 def carregar_areas():
     conn = get_db_connection()
     try:
@@ -51,15 +54,19 @@ def carregar_atendimentos(ver_todos=False):
     try:
         filtro_sql = "" if ver_todos else "WHERE os.status != 'Concluído'"
         
+        # Query atualizada com JOIN duplo para funcionários (Executante e Solicitante)
         query = f"""
         SELECT 
             os.*, 
             e.frota, e.modelo, e.gestao_responsavel,
             f.nome as nome_executante,
+            f_solic.nome as nome_solicitante,
+            f_solic.matricula as mat_solicitante,
             op.nome as nome_operacao
         FROM ordens_servico os
         JOIN equipamentos e ON os.equipamento_id = e.id
         LEFT JOIN funcionarios f ON os.funcionario_id = f.id
+        LEFT JOIN funcionarios f_solic ON os.solicitante_id = f_solic.id
         LEFT JOIN tipos_operacao op ON os.tipo_operacao_id = op.id
         {filtro_sql}
         ORDER BY os.data_hora DESC
@@ -72,10 +79,15 @@ def carregar_atendimentos(ver_todos=False):
             atendimentos['data_encerramento'] = pd.to_datetime(atendimentos['data_encerramento'], format='mixed', errors='coerce', dayfirst=True)
             atendimentos['descricao_curta'] = atendimentos['descricao'].str.slice(0, 40) + '...'
             
+            # Tratamento de Nulos para Display
             atendimentos['display'] = "Ticket " + atendimentos['id'].astype(str) + \
                                     " (" + atendimentos['status'] + ") - Frota: " + \
                                     atendimentos['frota'] + " - " + \
                                     atendimentos['descricao_curta']
+            
+            # Garante que as colunas novas existam no DF mesmo se vierem vazias
+            if 'classificacao' not in atendimentos.columns: atendimentos['classificacao'] = 'Corretiva'
+            if 'maquina_parada' not in atendimentos.columns: atendimentos['maquina_parada'] = 1
         else:
             atendimentos['display'] = []
 
@@ -91,7 +103,7 @@ tab_editar, tab_excluir = st.tabs(["✏️ Editar / Baixar OS", "🗑️ Excluir
 
 operacoes_df = carregar_operacoes()
 funcionarios_df = carregar_funcionarios()
-areas_df = carregar_areas() # Carrega as áreas aqui
+areas_df = carregar_areas()
 
 # ==============================================================================
 # ABA 1: EDITAR
@@ -126,6 +138,7 @@ with tab_editar:
                 st.info(f"Ticket: **{selected_id}** | Frota: **{selected_row['frota']}** ({selected_row['modelo']})")
             
             with col_print:
+                # Prepara dados para impressão
                 dados_para_pdf = {
                     'id': selected_id,
                     'numero_os_oficial': selected_row['numero_os_oficial'],
@@ -152,8 +165,9 @@ with tab_editar:
             # --- FORMULÁRIO DE EDIÇÃO ---
             with st.form("form_update_os"):
                 st.markdown("###### 📋 Dados Gerais")
-                col1, col2, col3 = st.columns(3)
                 
+                # Linha 1
+                col1, col2, col3 = st.columns(3)
                 with col1:
                     status_ops = ["Pendente", "Aberto (Parada)", "Em Andamento", "Aguardando Peças", "Concluído"]
                     try: idx_st = status_ops.index(selected_row['status']) 
@@ -171,6 +185,7 @@ with tab_editar:
                     val_os = selected_row['numero_os_oficial'] if selected_row['numero_os_oficial'] else ""
                     novo_num_os = st.text_input("Número da OS Oficial", value=val_os)
 
+                # Linha 2
                 col4, col5, col6 = st.columns(3)
                 with col4:
                     ops_list = operacoes_df['nome'].tolist()
@@ -179,17 +194,65 @@ with tab_editar:
                     novo_op_nome = st.selectbox("Tipo de Operação", options=ops_list, index=idx_op)
 
                 with col5:
-                    funcs_list = funcionarios_df['nome'].tolist()
+                    funcs_list = funcionarios_df['display'].tolist()
+                    # Tenta encontrar o executante atual na lista formatada
                     idx_f = None
-                    if pd.notna(selected_row['nome_executante']) and selected_row['nome_executante'] in funcs_list:
-                        idx_f = funcs_list.index(selected_row['nome_executante'])
-                    novo_func_nome = st.selectbox("Executante", options=funcs_list, index=idx_f)
+                    nome_atual = selected_row['nome_executante']
+                    if pd.notna(nome_atual):
+                        # Procura parcial ou exata
+                        match = [f for f in funcs_list if nome_atual in f]
+                        if match: idx_f = funcs_list.index(match[0])
+                    
+                    novo_func_display = st.selectbox("Executante", options=funcs_list, index=idx_f)
 
                 with col6:
                     val_h = float(selected_row['horimetro']) if pd.notna(selected_row['horimetro']) else 0.0
                     novo_horimetro = st.number_input("Horímetro", value=val_h, min_value=0.0, step=0.1, format="%.1f")
 
-                st.markdown("###### 📅 Datas (Edição Manual)")
+                # Linha 3 (NOVO): Solicitante e Gestor
+                col_solic, col_gestor = st.columns(2)
+                with col_solic:
+                    # Lógica para encontrar o solicitante atual
+                    idx_s = None
+                    nome_solic_atual = selected_row['nome_solicitante']
+                    mat_solic_atual = selected_row['mat_solicitante']
+                    
+                    if pd.notna(nome_solic_atual):
+                        # Tenta casar nome e matrícula
+                        match_s = [f for f in funcs_list if nome_solic_atual in f]
+                        if match_s: idx_s = funcs_list.index(match_s[0])
+
+                    novo_solicitante_display = st.selectbox(
+                        "Solicitante (Quem pediu)", 
+                        options=funcs_list, 
+                        index=idx_s,
+                        placeholder="Selecione..."
+                    )
+                
+                with col_gestor:
+                    # Gestor é read-only, puxado do banco
+                    gestor_bd = selected_row['gestao_responsavel'] if pd.notna(selected_row['gestao_responsavel']) else "-"
+                    st.text_input("Gestor Responsável (Da Frota)", value=gestor_bd, disabled=True)
+
+                # Linha 4 (NOVO): KPI
+                st.markdown("###### 🔧 Classificação (KPI)")
+                col_kpi1, col_kpi2 = st.columns(2)
+                with col_kpi1:
+                    # Classificação
+                    opcoes_class = ["Corretiva", "Preventiva", "Preditiva"]
+                    val_class = selected_row.get('classificacao', 'Corretiva')
+                    # Tenta limpar valor antigo se vier sujo
+                    val_class_clean = val_class.split(' ')[0] if val_class else 'Corretiva'
+                    if val_class_clean not in opcoes_class: val_class_clean = 'Corretiva'
+                    
+                    nova_classificacao = st.selectbox("Tipo de Intervenção", options=opcoes_class, index=opcoes_class.index(val_class_clean))
+                
+                with col_kpi2:
+                    # Máquina Parada
+                    val_parada = bool(selected_row.get('maquina_parada', 1))
+                    nova_parada = st.checkbox("Máquina Parada?", value=val_parada)
+
+                st.markdown("###### 📅 Datas e Local")
                 val_abertura = selected_row['data_hora']
                 if pd.isnull(val_abertura): dt_ab_db = datetime.now(FUSO_HORARIO).replace(tzinfo=None)
                 else: dt_ab_db = val_abertura.to_pydatetime()
@@ -210,29 +273,15 @@ with tab_editar:
                     else:
                         st.info("Mude para 'Concluído' para fechar a data.")
 
-                st.markdown("###### 📍 Localização")
                 col_loc, col_lat, col_lon = st.columns([2, 1, 1])
-                
                 with col_loc:
-                    # SUBSTITUIÇÃO AQUI: SELECTBOX DE ÁREAS
                     opcoes_local = areas_df['display'].tolist() if not areas_df.empty else []
                     val_local_atual = selected_row['local_atendimento']
                     idx_local = None
-                    
-                    # Tenta encontrar o valor atual na lista
-                    if val_local_atual in opcoes_local:
-                        idx_local = opcoes_local.index(val_local_atual)
-                        
-                    novo_local = st.selectbox(
-                        "Local / Talhão", 
-                        options=opcoes_local, 
-                        index=idx_local,
-                        placeholder="Selecione ou Atualize..."
-                    )
-                    
-                    # Aviso se o valor antigo não bater com a lista (caso de migração)
+                    if val_local_atual in opcoes_local: idx_local = opcoes_local.index(val_local_atual)
+                    novo_local = st.selectbox("Local / Talhão", options=opcoes_local, index=idx_local)
                     if val_local_atual and val_local_atual not in opcoes_local:
-                        st.caption(f"⚠️ Valor anterior: **{val_local_atual}** (Não cadastrado). Selecione um novo acima.")
+                        st.caption(f"Valor anterior: {val_local_atual}")
                 
                 lat_at = float(selected_row['latitude']) if pd.notna(selected_row['latitude']) else 0.0
                 lon_at = float(selected_row['longitude']) if pd.notna(selected_row['longitude']) else 0.0
@@ -247,10 +296,16 @@ with tab_editar:
                     conn = None
                     try:
                         novo_op_id = operacoes_df[operacoes_df['nome'] == novo_op_nome]['id'].values[0]
+                        
+                        # ID do Executante
                         novo_func_id = None
-                        if novo_func_nome:
-                            novo_func_id = funcionarios_df[funcionarios_df['nome'] == novo_func_nome]['id'].values[0]
-                            novo_func_id = int(novo_func_id)
+                        if novo_func_display:
+                            novo_func_id = funcionarios_df[funcionarios_df['display'] == novo_func_display]['id'].values[0]
+
+                        # ID do Solicitante (NOVO)
+                        novo_solic_id = None
+                        if novo_solicitante_display:
+                            novo_solic_id = funcionarios_df[funcionarios_df['display'] == novo_solicitante_display]['id'].values[0]
 
                         final_abertura = datetime.combine(d_ab, t_ab)
                         final_encerramento = None
@@ -262,21 +317,28 @@ with tab_editar:
                         final_lat = nova_lat if nova_lat != 0.0 else None
                         final_lon = nova_lon if nova_lon != 0.0 else None
                         
+                        # KPI
+                        final_parada = 1 if nova_parada else 0
+                        
                         conn = get_db_connection()
+                        # QUERY ATUALIZADA
                         sql = """
                             UPDATE ordens_servico 
                             SET status=?, local_atendimento=?, descricao=?, tipo_operacao_id=?, 
                                 numero_os_oficial=?, funcionario_id=?, horimetro=?, prioridade=?, 
-                                latitude=?, longitude=?, data_hora=?, data_encerramento=?
+                                latitude=?, longitude=?, data_hora=?, data_encerramento=?,
+                                classificacao=?, maquina_parada=?, solicitante_id=?
                             WHERE id=?
                         """
                         params = (novo_status, novo_local, nova_descricao, int(novo_op_id), 
                                   novo_num_os, novo_func_id, novo_horimetro, nova_prioridade,
-                                  final_lat, final_lon, final_abertura, final_encerramento, selected_id)
+                                  final_lat, final_lon, final_abertura, final_encerramento,
+                                  nova_classificacao, final_parada, novo_solic_id, selected_id)
+                        
                         conn.execute(sql, params)
                         conn.commit()
                         
-                        detalhes = f"Status: {novo_status} | Abertura: {final_abertura} | Local: {novo_local}"
+                        detalhes = f"Status: {novo_status} | Class: {nova_classificacao}"
                         registrar_log("EDITAR", f"OS #{selected_id}", detalhes)
                         st.success(f"✅ Ticket {selected_id} atualizado!")
                         st.cache_data.clear()
