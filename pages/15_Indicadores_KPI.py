@@ -5,7 +5,6 @@ import sys
 import os
 
 # --- BLINDAGEM DE IMPORTAÇÃO (Essencial para Streamlit Cloud) ---
-# Adiciona o diretório raiz ao caminho do Python para encontrar 'database' e 'utils_pdf'
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from database import get_db_connection
@@ -15,11 +14,79 @@ from utils_pdf import gerar_relatorio_kpi
 st.set_page_config(layout="wide", page_title="Indicadores de Confiabilidade")
 st.title("📈 Indicadores de Performance (MTBF & MTTR)")
 
+# --- CSS MODERNO PARA OS CARDS (Mesmo estilo do Painel) ---
+st.markdown("""
+<style>
+/* Cards KPI */
+.kpi-card {
+    background-color: #f8f9fa;
+    border: 1px solid #e9ecef;
+    border-radius: 10px;
+    padding: 15px 20px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+    transition: all 0.3s ease;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+}
+.kpi-card:hover {
+    box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+    transform: translateY(-3px);
+}
+.kpi-icon {
+    float: right;
+    font-size: 1.8rem;
+    margin-top: -5px;
+}
+.kpi-title {
+    font-size: 0.9rem;
+    color: #6c757d;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 5px;
+}
+.kpi-value {
+    font-size: 2rem;
+    font-weight: 800;
+    color: #212529;
+}
+.kpi-sub {
+    font-size: 0.8rem;
+    color: #adb5bd;
+    margin-top: 5px;
+}
+
+/* Adaptação Dark Mode */
+@media (prefers-color-scheme: dark) {
+    .kpi-card {
+        background-color: #262730;
+        border-color: #3f3f46;
+    }
+    .kpi-title { color: #a1a1aa; }
+    .kpi-value { color: #f4f4f5; }
+}
+</style>
+""", unsafe_allow_html=True)
+
+# Função auxiliar para desenhar o card
+def exibir_card(col, titulo, valor, icone, cor_borda, subtexto=""):
+    html_content = f"""
+    <div class="kpi-card" style="border-left: 5px solid {cor_borda};">
+        <div>
+            <div class="kpi-title">{titulo} <span class="kpi-icon">{icone}</span></div>
+            <div class="kpi-value">{valor}</div>
+            <div class="kpi-sub">{subtexto}</div>
+        </div>
+    </div>
+    """
+    col.markdown(html_content, unsafe_allow_html=True)
+
 # --- 1. CONFIGURAÇÕES E FILTROS ---
 with st.sidebar:
     st.header("Parâmetros de Cálculo")
     
-    # Fundamental para o MTBF: Quantas horas a fazenda trabalha por dia?
     horas_operacionais_dia = st.number_input(
         "Horas Operacionais / Dia", 
         min_value=1, max_value=24, value=10, 
@@ -31,11 +98,9 @@ with st.sidebar:
     
     conn = get_db_connection()
     
-    # A) Filtro de Data
     dt_inicio = st.date_input("De:", datetime.now() - timedelta(days=90))
     dt_fim = st.date_input("Até:", datetime.now())
     
-    # B) Filtro de Modelo
     try:
         df_modelos = pd.read_sql("SELECT DISTINCT modelo FROM equipamentos ORDER BY modelo", conn)
         lista_modelos = df_modelos['modelo'].dropna().unique()
@@ -50,7 +115,6 @@ with st.sidebar:
         st.error("Erro ao carregar modelos.")
         filtro_modelo = []
 
-    # C) Filtro de Frota
     query_frotas = "SELECT DISTINCT frota FROM equipamentos"
     params_frotas = []
     
@@ -106,16 +170,13 @@ if df.empty:
     st.warning("Sem dados para calcular indicadores com os filtros atuais.")
     st.stop()
 
-# Conversão de Datas (Blindada)
 df['abertura'] = pd.to_datetime(df['abertura'], format='mixed', errors='coerce')
 df['fechamento'] = pd.to_datetime(df['fechamento'], format='mixed', errors='coerce')
 
-# Calcular Duração
 agora = datetime.now()
 df['fechamento_calc'] = df['fechamento'].fillna(agora)
 df['duracao_horas'] = (df['fechamento_calc'] - df['abertura']).dt.total_seconds() / 3600
 
-# Tratamento de Nulos
 if 'classificacao' not in df.columns: df['classificacao'] = 'Corretiva'
 if 'maquina_parada' not in df.columns: df['maquina_parada'] = 1
 
@@ -124,7 +185,6 @@ df['maquina_parada'] = df['maquina_parada'].fillna(1).astype(int)
 
 # --- 4. CÁLCULO DOS INDICADORES ---
 
-# A) Identificar FALHAS
 df_falhas = df[
     (df['classificacao'].str.contains('Corretiva', case=False)) & 
     (df['maquina_parada'] == 1)
@@ -133,7 +193,6 @@ df_falhas = df[
 num_falhas = len(df_falhas)
 tempo_total_reparo = df_falhas['duracao_horas'].sum()
 
-# B) Calcular Tempo Total
 dias_periodo = (dt_fim - dt_inicio).days + 1
 tempo_total_periodo = dias_periodo * horas_operacionais_dia 
 
@@ -146,13 +205,11 @@ else:
 
 tempo_total_disponivel_frota = tempo_total_periodo * num_maquinas
 
-# C) MTTR
 if num_falhas > 0:
     mttr = tempo_total_reparo / num_falhas
 else:
     mttr = 0
 
-# D) MTBF
 tempo_operacao_real = tempo_total_disponivel_frota - tempo_total_reparo
 
 if num_falhas > 0:
@@ -160,21 +217,28 @@ if num_falhas > 0:
 else:
     mtbf = tempo_operacao_real 
 
-# E) Disponibilidade
 if (mtbf + mttr) > 0:
     disponibilidade = (mtbf / (mtbf + mttr)) * 100
 else:
     disponibilidade = 100.0
 
-# --- 5. VISUALIZAÇÃO (DASHBOARD) ---
+# --- 5. VISUALIZAÇÃO (DASHBOARD MODERNIZADO) ---
 
-st.markdown(f"**Filtro Ativo:** {len(df)} registros analisados | **Máquinas Consideradas:** {num_maquinas}")
+st.caption(f"Analisando **{len(df)}** registros de **{num_maquinas}** máquinas no período.")
 
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("MTBF (Confiabilidade)", f"{mtbf:.1f} h", help="Quanto MAIOR, melhor.")
-c2.metric("MTTR (Eficiência)", f"{mttr:.1f} h", help="Quanto MENOR, melhor.", delta_color="inverse")
-c3.metric("Disponibilidade", f"{disponibilidade:.1f}%")
-c4.metric("Total de Falhas", num_falhas)
+
+# MTBF - Azul (Confiabilidade)
+exibir_card(c1, "MTBF (Confiabilidade)", f"{mtbf:.1f} h", "🛡️", "#3B82F6", "Quanto MAIOR, melhor")
+
+# MTTR - Laranja (Eficiência)
+exibir_card(c2, "MTTR (Eficiência)", f"{mttr:.1f} h", "🔧", "#F59E0B", "Quanto MENOR, melhor")
+
+# Disponibilidade - Verde (Meta)
+exibir_card(c3, "Disponibilidade", f"{disponibilidade:.1f}%", "✅", "#10B981", "% tempo pronta para uso")
+
+# Falhas - Vermelho (Alerta)
+exibir_card(c4, "Total de Falhas", num_falhas, "🚨", "#EF4444", "Quebras com parada")
 
 st.divider()
 
@@ -201,7 +265,6 @@ with g2:
         df_top = df_falhas['frota'].value_counts().reset_index().head(5)
         df_top.columns = ['Frota', 'Qtd Falhas']
         
-        # Garante string para evitar "k" em números grandes
         df_top['Frota'] = df_top['Frota'].astype(str)
         
         fig_top = px.bar(
@@ -234,7 +297,6 @@ st.divider()
 col_btn, col_exp = st.columns([1, 4])
 
 with col_btn:
-    # Preparar dados para o PDF
     dados_kpis = {
         'mtbf': f"{mtbf:.1f} h",
         'mttr': f"{mttr:.1f} h",
@@ -247,7 +309,6 @@ with col_btn:
     if filtro_frota: texto_filtros += f" | Frotas: {len(filtro_frota)}"
     
     try:
-        # Gera o PDF usando a função importada
         pdf_bytes = gerar_relatorio_kpi(dados_kpis, df_falhas, texto_filtros)
         
         st.download_button(
