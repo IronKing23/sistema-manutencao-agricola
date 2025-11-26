@@ -291,22 +291,24 @@ def check_password():
                 
                 if senha_ok:
                     # --- ANIMAÇÃO FULLSCREEN ---
-                    # Injeta o HTML de overlay que cobre a tela inteira
-                    st.markdown("""
-                    <div id="loading-screen">
-                        <div class="loader-content">
-                            <div class="jumping-tractor">🚜</div>
-                            <h2 style="color: #2E7D32; margin-bottom: 5px;">Iniciando Sistema...</h2>
-                            <p style="color: #888; font-size: 14px;">Carregando módulos e dados...</p>
-                            <div class="progress-container">
-                                <div class="progress-bar"></div>
+                    login_container.empty()
+                    
+                    with login_container:
+                        st.markdown("<br><br>", unsafe_allow_html=True)
+                        st.markdown("""
+                        <div id="loading-screen">
+                            <div class="loader-content">
+                                <div class="jumping-tractor">🚜</div>
+                                <h2 style="color: #2E7D32; margin-bottom: 5px;">Iniciando Sistema...</h2>
+                                <p style="color: #888; font-size: 14px;">Carregando módulos e dados...</p>
+                                <div class="progress-container">
+                                    <div class="progress-bar"></div>
+                                </div>
                             </div>
                         </div>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-                    # Simula tempo para a barra encher visualmente
-                    time.sleep(2.2) 
+                        """, unsafe_allow_html=True)
+                        
+                        time.sleep(2.2) 
                     
                     # Registra Sessão
                     st.session_state["logged_in"] = True
@@ -316,9 +318,11 @@ def check_password():
                     
                     if manter:
                         try:
-                            expires = datetime.now() + timedelta(days=30)
-                            cookie_manager.set("manutencao_user", user, expires_at=expires)
-                        except: pass
+                            # CORREÇÃO AQUI: Usando datetime para garantir compatibilidade
+                            expires_at = datetime.now() + timedelta(days=30)
+                            cookie_manager.set("manutencao_user", user, expires_at=expires_at)
+                        except Exception as e:
+                            print(f"Erro cookie: {e}")
                     
                     st.rerun()
                 else:
