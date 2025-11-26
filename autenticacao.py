@@ -35,8 +35,8 @@ def garantir_tabela_usuarios():
     conn.close()
 
 # --- Gerenciador de Cookies ---
-# O cookie manager precisa ser instanciado uma única vez com uma chave fixa
 def get_manager():
+    # key fixa é crucial para manter a referência entre reruns
     return stx.CookieManager(key="main_auth_manager")
 
 # --- FUNÇÃO PRINCIPAL DE VERIFICAÇÃO ---
@@ -45,16 +45,26 @@ def check_password():
     
     cookie_manager = get_manager()
     
-    # Pequeno delay para garantir carregamento dos cookies pelo componente JS
-    time.sleep(0.1)
-
     # ==========================================================================
-    # 1. TENTATIVA DE AUTO-LOGIN VIA COOKIE (PERSISTÊNCIA)
+    # 1. TENTATIVA DE AUTO-LOGIN VIA COOKIE (COM RETRY PARA WEB)
     # ==========================================================================
-    # Se o usuário NÃO está na sessão RAM (nova aba ou F5), tentamos o cookie
+    # Se o usuário NÃO está logado na sessão atual (RAM), tentamos recuperar via Cookie.
     if not st.session_state.get("logged_in"):
         try:
+            # Primeira tentativa de leitura
             cookies = cookie_manager.get_all()
+            
+            # LÓGICA DE RETENTATIVA (CORREÇÃO PARA CLOUD/WEB)
+            # Se a lista de cookies vier vazia ou nula, pode ser apenas latência da rede.
+            # Esperamos um pouco e tentamos ler novamente.
+            if not cookies or "manutencao_user" not in cookies:
+                time.sleep(0.3) # Aguarda o componente JS carregar
+                cookies = cookie_manager.get_all()
+                
+                if not cookies or "manutencao_user" not in cookies:
+                    time.sleep(0.3) # Segunda chance
+                    cookies = cookie_manager.get_all()
+
             cookie_user = cookies.get("manutencao_user")
             
             if cookie_user:
@@ -70,10 +80,12 @@ def check_password():
                     st.session_state["username"] = cookie_user
                     st.session_state["user_nome"] = dados[0]
                     st.session_state["force_change"] = (dados[1] == 1)
-                    # Nota: Não usamos st.rerun() aqui para evitar loop infinito de recarregamento.
-                    # O fluxo segue naturalmente e libera o acesso abaixo.
+                    
+                    # Força um rerun para atualizar a interface imediatamente com o login feito
+                    st.rerun()
+                    
         except Exception as e:
-            print(f"Erro ao ler cookie: {e}")
+            print(f"Debug Cookie: {e}")
 
     # ==========================================================================
     # 2. SE ESTIVER LOGADO (Sessão ou Cookie validado acima)
@@ -118,14 +130,16 @@ def check_password():
             
             if st.button("Sair / Logout"):
                 # 1. Apaga o cookie (mata a persistência)
-                cookie_manager.delete("manutencao_user")
+                try:
+                    cookie_manager.delete("manutencao_user")
+                except: pass
                 
                 # 2. Limpa a sessão (mata a memória RAM)
                 for key in ["logged_in", "user_nome", "username", "force_change"]:
                     if key in st.session_state: del st.session_state[key]
                 
                 st.warning("Saindo...")
-                time.sleep(1)
+                time.sleep(1) # Tempo para o cookie ser deletado no navegador
                 st.rerun()
         
         return True # Retorna True para o app.py carregar as páginas
@@ -179,7 +193,8 @@ def check_password():
                                 cookie_manager.set("manutencao_user", user, expires_at=expires)
                             
                             st.success("Login realizado com sucesso!")
-                            time.sleep(0.5)
+                            # Delay maior no login para garantir que o cookie seja gravado antes do rerun
+                            time.sleep(1.0) 
                             st.rerun()
                         else:
                             st.error("Usuário ou senha incorretos.")
