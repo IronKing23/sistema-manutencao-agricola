@@ -43,6 +43,7 @@ def check_password():
     garantir_tabela_usuarios()
     cookie_manager = get_manager()
     
+    # Pequeno delay inicial para o componente montar
     time.sleep(0.1)
 
     # ==========================================================================
@@ -53,6 +54,7 @@ def check_password():
             try: cookie_manager.delete("manutencao_user")
             except: pass
             
+            # Limpa sessão
             for key in ["logged_in", "user_nome", "username", "force_change"]:
                 if key in st.session_state: del st.session_state[key]
             
@@ -62,7 +64,7 @@ def check_password():
             st.rerun()
 
     # ==========================================================================
-    # 2. TENTATIVA DE AUTO-LOGIN (COOKIE) - COM RETRY ROBUSTO
+    # 2. TENTATIVA DE AUTO-LOGIN (COOKIE)
     # ==========================================================================
     if not st.session_state.get("logged_in") and not st.session_state.get("just_logged_out"):
         placeholder = st.empty()
@@ -73,26 +75,21 @@ def check_password():
             raw_cookies = cookie_manager.get_all()
             cookie_user = raw_cookies.get("manutencao_user") if raw_cookies else None
             
-            # LÓGICA DE ESPERA INTELIGENTE
+            # LÓGICA DE ESPERA INTELIGENTE (RETRY)
             # Se não achou cookie, espera um pouco e tenta de novo (pode ser latência)
             if not cookie_user:
                 with placeholder.container():
-                    # Um spinner invisível/vazio apenas para segurar a execução visualmente se necessário
-                    # time.sleep(0.5) 
-                    
-                    # Tentativa 2
+                    # Tentativa 2 (Esperar 0.5s)
                     time.sleep(0.5)
                     raw_cookies = cookie_manager.get_all()
                     cookie_user = raw_cookies.get("manutencao_user") if raw_cookies else None
                     
                     if not cookie_user:
-                        # Tentativa 3 (Final)
-                        time.sleep(0.5) 
+                        # Tentativa 3 (Esperar mais 0.5s)
+                        time.sleep(0.5)
                         raw_cookies = cookie_manager.get_all()
                         cookie_user = raw_cookies.get("manutencao_user") if raw_cookies else None
-
-        except Exception as e:
-            print(f"Erro leitura cookie: {e}")
+        except: pass
         
         placeholder.empty()
 
@@ -111,8 +108,7 @@ def check_password():
                     st.session_state["user_nome"] = dados[0]
                     st.session_state["force_change"] = (dados[1] == 1)
                     st.rerun()
-            except Exception as e:
-                print(f"Erro validação banco: {e}")
+            except: pass
 
     if st.session_state.get("just_logged_out"):
         st.session_state["just_logged_out"] = False
@@ -330,7 +326,7 @@ def check_password():
                     
                     if manter:
                         try:
-                            # CORREÇÃO AQUI: Garantindo data válida para o cookie
+                            # CORREÇÃO: Usando data simples e compatível
                             expires_at = datetime.now() + timedelta(days=30)
                             cookie_manager.set("manutencao_user", user, expires_at=expires_at)
                         except Exception as e:
