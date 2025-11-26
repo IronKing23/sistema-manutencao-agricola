@@ -1,9 +1,15 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import sys
+import os
+
+# --- BLINDAGEM DE IMPORTAÇÃO (Essencial para Streamlit Cloud) ---
+# Adiciona o diretório raiz ao caminho do Python para encontrar 'database' e 'utils_pdf'
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from database import get_db_connection
 from datetime import datetime, timedelta
-# Importamos a nova função aqui
 from utils_pdf import gerar_relatorio_kpi 
 
 st.set_page_config(layout="wide", page_title="Indicadores de Confiabilidade")
@@ -100,7 +106,7 @@ if df.empty:
     st.warning("Sem dados para calcular indicadores com os filtros atuais.")
     st.stop()
 
-# Conversão de Datas
+# Conversão de Datas (Blindada)
 df['abertura'] = pd.to_datetime(df['abertura'], format='mixed', errors='coerce')
 df['fechamento'] = pd.to_datetime(df['fechamento'], format='mixed', errors='coerce')
 
@@ -195,6 +201,7 @@ with g2:
         df_top = df_falhas['frota'].value_counts().reset_index().head(5)
         df_top.columns = ['Frota', 'Qtd Falhas']
         
+        # Garante string para evitar "k" em números grandes
         df_top['Frota'] = df_top['Frota'].astype(str)
         
         fig_top = px.bar(
@@ -222,7 +229,7 @@ with g2:
     else:
         st.info("Tudo operando normalmente.")
 
-# --- ÁREA DE DOWNLOAD (NOVO) ---
+# --- ÁREA DE DOWNLOAD ---
 st.divider()
 col_btn, col_exp = st.columns([1, 4])
 
@@ -240,7 +247,7 @@ with col_btn:
     if filtro_frota: texto_filtros += f" | Frotas: {len(filtro_frota)}"
     
     try:
-        # Gera o PDF usando a nova função
+        # Gera o PDF usando a função importada
         pdf_bytes = gerar_relatorio_kpi(dados_kpis, df_falhas, texto_filtros)
         
         st.download_button(
