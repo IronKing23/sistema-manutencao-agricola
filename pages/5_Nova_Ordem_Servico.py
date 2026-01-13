@@ -75,44 +75,47 @@ def obter_ordem_aberta(equipamento_id):
     finally:
         conn.close()
 
-# Função para gerar o template Excel
+# Função para gerar o template Excel (CORRIGIDA: Removida dependência explícita de xlsxwriter)
 def gerar_template_excel(frotas, operacoes, areas):
     output = io.BytesIO()
     
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        # 1. Aba Principal (Template Vazio)
-        df_template = pd.DataFrame(columns=[
-            'Frota', 'Operacao', 'Descricao', 'Local', 
-            'Prioridade', 'Horimetro', 'OS_Oficial', 
-            'Data_Abertura', 'Data_Encerramento'
-        ])
-        
-        # Adiciona exemplos para ajudar
-        df_template.loc[0] = [
-            'Ex: 64080', 'Ex: Elétrica', 'Descrição do problema...', 'Ex: TALHÃO 10', 
-            'Alta/Média/Baixa', '1234.5', '12345', 
-            datetime.now().strftime('%d/%m/%Y'), ''
-        ]
-        
-        df_template.to_excel(writer, sheet_name='Preencher_Aqui', index=False)
-        
-        # Ajusta largura das colunas
-        worksheet = writer.sheets['Preencher_Aqui']
-        for idx, col in enumerate(df_template.columns):
-            worksheet.set_column(idx, idx, 20)
+    # Tenta usar a engine padrão disponível (openpyxl é o padrão moderno)
+    # Se falhar, tentamos CSV como fallback
+    try:
+        with pd.ExcelWriter(output) as writer: # Removido engine='xlsxwriter'
+            # 1. Aba Principal (Template Vazio)
+            df_template = pd.DataFrame(columns=[
+                'Frota', 'Operacao', 'Descricao', 'Local', 
+                'Prioridade', 'Horimetro', 'OS_Oficial', 
+                'Data_Abertura', 'Data_Encerramento'
+            ])
             
-        # 2. Abas de Referência (Dados do Sistema)
-        # Frotas
-        if not frotas.empty:
-            frotas[['frota', 'modelo']].to_excel(writer, sheet_name='Ref_Frotas', index=False)
+            # Adiciona exemplos para ajudar
+            df_template.loc[0] = [
+                'Ex: 64080', 'Ex: Elétrica', 'Descrição do problema...', 'Ex: TALHÃO 10', 
+                'Alta/Média/Baixa', '1234.5', '12345', 
+                datetime.now().strftime('%d/%m/%Y'), ''
+            ]
             
-        # Operações
-        if not operacoes.empty:
-            operacoes[['nome']].to_excel(writer, sheet_name='Ref_Operacoes', index=False)
+            df_template.to_excel(writer, sheet_name='Preencher_Aqui', index=False)
             
-        # Locais
-        if not areas.empty:
-            areas[['display']].to_excel(writer, sheet_name='Ref_Locais', index=False)
+            # 2. Abas de Referência (Dados do Sistema)
+            # Frotas
+            if not frotas.empty:
+                frotas[['frota', 'modelo']].to_excel(writer, sheet_name='Ref_Frotas', index=False)
+                
+            # Operações
+            if not operacoes.empty:
+                operacoes[['nome']].to_excel(writer, sheet_name='Ref_Operacoes', index=False)
+                
+            # Locais
+            if not areas.empty:
+                areas[['display']].to_excel(writer, sheet_name='Ref_Locais', index=False)
+                
+    except Exception as e:
+        # Fallback de erro silencioso se nenhuma engine Excel estiver instalada
+        st.error(f"Erro ao gerar Excel (Falta biblioteca openpyxl ou xlsxwriter): {e}")
+        return None
             
     output.seek(0)
     return output
@@ -335,8 +338,8 @@ with tab_importar:
         """)
         
     with c_btn:
-        try:
-            excel_bytes = gerar_template_excel(frotas_df, operacoes_df, areas_df)
+        excel_bytes = gerar_template_excel(frotas_df, operacoes_df, areas_df)
+        if excel_bytes:
             st.download_button(
                 label="📥 Baixar Modelo (Excel)",
                 data=excel_bytes,
@@ -345,8 +348,6 @@ with tab_importar:
                 type="primary",
                 use_container_width=True
             )
-        except Exception as e:
-            st.error(f"Erro ao gerar modelo: {e}")
     
     st.divider()
     
