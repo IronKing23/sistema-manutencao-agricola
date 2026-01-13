@@ -6,6 +6,7 @@ from datetime import datetime
 import sys
 import os
 import pytz 
+import io
 
 # Importa o registrador de logs
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -60,7 +61,6 @@ def carregar_areas():
     finally:
         conn.close()
 
-# Função SEM CACHE (Deve consultar o estado real no momento)
 def obter_ordem_aberta(equipamento_id):
     conn = get_db_connection()
     try:
@@ -74,6 +74,48 @@ def obter_ordem_aberta(equipamento_id):
         return cursor.fetchone()
     finally:
         conn.close()
+
+# Função para gerar o template Excel
+def gerar_template_excel(frotas, operacoes, areas):
+    output = io.BytesIO()
+    
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        # 1. Aba Principal (Template Vazio)
+        df_template = pd.DataFrame(columns=[
+            'Frota', 'Operacao', 'Descricao', 'Local', 
+            'Prioridade', 'Horimetro', 'OS_Oficial', 
+            'Data_Abertura', 'Data_Encerramento'
+        ])
+        
+        # Adiciona exemplos para ajudar
+        df_template.loc[0] = [
+            'Ex: 64080', 'Ex: Elétrica', 'Descrição do problema...', 'Ex: TALHÃO 10', 
+            'Alta/Média/Baixa', '1234.5', '12345', 
+            datetime.now().strftime('%d/%m/%Y'), ''
+        ]
+        
+        df_template.to_excel(writer, sheet_name='Preencher_Aqui', index=False)
+        
+        # Ajusta largura das colunas
+        worksheet = writer.sheets['Preencher_Aqui']
+        for idx, col in enumerate(df_template.columns):
+            worksheet.set_column(idx, idx, 20)
+            
+        # 2. Abas de Referência (Dados do Sistema)
+        # Frotas
+        if not frotas.empty:
+            frotas[['frota', 'modelo']].to_excel(writer, sheet_name='Ref_Frotas', index=False)
+            
+        # Operações
+        if not operacoes.empty:
+            operacoes[['nome']].to_excel(writer, sheet_name='Ref_Operacoes', index=False)
+            
+        # Locais
+        if not areas.empty:
+            areas[['display']].to_excel(writer, sheet_name='Ref_Locais', index=False)
+            
+    output.seek(0)
+    return output
 
 # Carrega dados iniciais
 try:
@@ -109,7 +151,6 @@ with tab_manual:
         with col_f1:
             frota_display = st.selectbox("Frota Atendida*", options=frotas_df['display'], index=None, placeholder="Selecione...")
         
-        # Lógica Automática do Gestor
         gestor_atual = ""
         if frota_display:
             try:
@@ -119,12 +160,12 @@ with tab_manual:
             except: pass
             
         with col_f2:
-            st.text_input("Gestor Responsável (Automático)", value=gestor_atual, disabled=True, help="Puxado do cadastro da máquina.")
+            st.text_input("Gestor Responsável (Automático)", value=gestor_atual, disabled=True)
 
         with col_f3:
             horimetro = st.number_input("Horímetro Atual", min_value=0.0, step=0.1, format="%.1f")
 
-        # Alerta Duplicidade Visual
+        # Alerta Duplicidade
         if frota_display:
             try:
                 eid = frotas_df[frotas_df['display'] == frota_display]['id'].values[0]
@@ -139,7 +180,6 @@ with tab_manual:
             local_atendimento = st.selectbox("Local / Talhão*", options=opcoes_local, index=None, placeholder="Selecione...")
         
         with col_solic:
-            # Novo Campo: SOLICITANTE
             solicitante_display = st.selectbox(
                 "Solicitante (Quem pediu)*", 
                 options=funcionarios_df['display'], 
@@ -155,7 +195,11 @@ with tab_manual:
         # --- LINHA 3: OPERAÇÃO E EXECUTANTE ---
         col4, col5, col6 = st.columns(3)
         with col4: operacao_display = st.selectbox("Operação (Defeito)*", options=operacoes_df['nome'], index=None)
-        with col5: funcionario_display = st.selectbox("Executante (Mecânico)", options=funcionarios_df['display'], index=None)
+        
+        with col5: 
+            # OPCIONAL NOVAMENTE (Sem o asterisco e sem trava)
+            funcionario_display = st.selectbox("Executante (Mecânico)", options=funcionarios_df['display'], index=None, placeholder="Definir depois...")
+            
         with col6: prioridade = st.selectbox("Prioridade", options=["🔴 Alta (Urgente)", "🟡 Média (Normal)", "🔵 Baixa"], index=1)
 
         # --- DADOS KPI ---
@@ -194,6 +238,7 @@ with tab_manual:
         submitted = st.form_submit_button("✅ Processar Solicitação")
 
     if submitted:
+        # --- VALIDAÇÃO ATUALIZADA: Mecânico NÃO é mais obrigatório ---
         if not frota_display or not operacao_display or not descricao or not local_atendimento or not solicitante_display:
             st.error("Preencha os campos obrigatórios (Frota, Local, Solicitante, Operação, Descrição).")
         elif "Parada" in tipo_atendimento and not num_os_oficial:
@@ -204,15 +249,14 @@ with tab_manual:
                 equipamento_id = frotas_df[frotas_df['display'] == frota_display]['id'].values[0]
                 tipo_operacao_id = operacoes_df[operacoes_df['nome'] == operacao_display]['id'].values[0]
                 
-                # ID do Executante (Mecânico)
+                # IDs
+                # Executante pode ser None se não selecionado
                 func_id = None
                 if funcionario_display:
                     func_id = funcionarios_df[funcionarios_df['display'] == funcionario_display]['id'].values[0]
-
-                # ID do Solicitante (NOVO)
-                solic_id = None
-                if solicitante_display:
-                    solic_id = funcionarios_df[funcionarios_df['display'] == solicitante_display]['id'].values[0]
+                
+                # Solicitante é obrigatório
+                solic_id = funcionarios_df[funcionarios_df['display'] == solicitante_display]['id'].values[0]
 
                 prioridade_clean = prioridade.split(" ")[1]
                 val_lat = lat if lat != 0.0 else None; val_lon = lon if lon != 0.0 else None
@@ -230,7 +274,7 @@ with tab_manual:
                     # UPDATE
                     id_antigo, desc_antiga, status_antigo, os_antiga = ordem_existente
                     
-                    nova_nota = f"\n\n--- [Add em {data_hora_atual.strftime('%d/%m %H:%M')}] ---\nSolicitante: {solicitante_display}\nTipo: {operacao_display} | Classe: {tipo_classificacao}\nDesc: {descricao}"
+                    nova_nota = f"\n\n--- [Add em {data_hora_atual.strftime('%d/%m %H:%M')}] ---\nSolicitante: {solicitante_display}\nMecânico: {funcionario_display or 'Não definido'}\nTipo: {operacao_display} | Classe: {tipo_classificacao}\nDesc: {descricao}"
                     descricao_final = desc_antiga + nova_nota
                     
                     status_final = status_antigo
@@ -239,8 +283,6 @@ with tab_manual:
                         status_final = status_inicial
                         if num_os_oficial: os_final = num_os_oficial
                     
-                    # Nota: No UPDATE, geralmente não mudamos o solicitante original da OS pai, 
-                    # apenas adicionamos a nota na descrição. Mas se quiser atualizar, adicione 'solicitante_id=?' na query.
                     cursor.execute("""
                         UPDATE ordens_servico SET descricao=?, horimetro=?, local_atendimento=?, prioridade=?,
                         latitude=?, longitude=?, status=?, numero_os_oficial=?, funcionario_id=?, tipo_operacao_id=?
@@ -251,7 +293,7 @@ with tab_manual:
                     registrar_log("EDITAR (FUSÃO)", f"OS #{id_antigo}", "Atualização manual")
                     st.success(f"🔄 Unificado no Ticket #{id_antigo}!")
                 else:
-                    # INSERT (COM O NOVO CAMPO SOLICITANTE)
+                    # INSERT
                     cursor.execute("""
                         INSERT INTO ordens_servico (
                             data_hora, equipamento_id, local_atendimento, descricao, 
@@ -264,11 +306,11 @@ with tab_manual:
                         data_hora_atual, int(equipamento_id), local_atendimento, descricao, 
                         int(tipo_operacao_id), status_inicial, num_os_oficial, func_id, 
                         horimetro, prioridade_clean, val_lat, val_lon,
-                        tipo_classificacao, flag_parada, int(solic_id) if solic_id else None
+                        tipo_classificacao, flag_parada, int(solic_id)
                     ))
                     
                     tid = cursor.lastrowid; conn.commit()
-                    registrar_log("CRIAR", f"OS #{tid}", f"Frota: {frota_display} | Solicitante: {solicitante_display}")
+                    registrar_log("CRIAR", f"OS #{tid}", f"Frota: {frota_display} | Mec: {funcionario_display}")
                     st.success(f"✅ Ticket #{tid} criado com sucesso!")
                 
             except Exception as e:
@@ -281,18 +323,34 @@ with tab_manual:
 # ABA 2: IMPORTAÇÃO EM LOTE (MANTIDA)
 # ==============================================================================
 with tab_importar:
-    st.subheader("Importação Inteligente (Histórico e Legado)")
-    st.info("Se a frota já tiver ordem aberta, o sistema atualizará (ou fechará se houver data fim). Se não, criará uma nova.")
+    st.subheader("Importação Inteligente")
     
-    st.markdown("""
-    **Colunas Aceitas (Excel):**
-    - `Frota` (Obrigatório) | `Operacao` (Obrigatório) | `Descricao` (Obrigatório) | `Local` (Obrigatório)
-    - `Data_Abertura` (Opcional)
-    - `Data_Encerramento` (Opcional - **Se preenchido, encerra a ordem**)
-    - `Prioridade`, `Horimetro`, `OS_Oficial`
-    """)
+    # --- NOVO: Botão de Download do Template ---
+    c_info, c_btn = st.columns([2, 1])
+    with c_info:
+        st.info("Baixe a planilha modelo abaixo, preencha os dados e faça o upload.")
+        st.markdown("""
+        **Colunas Obrigatórias:**
+        `Frota`, `Operacao`, `Descricao`, `Local`.
+        """)
+        
+    with c_btn:
+        try:
+            excel_bytes = gerar_template_excel(frotas_df, operacoes_df, areas_df)
+            st.download_button(
+                label="📥 Baixar Modelo (Excel)",
+                data=excel_bytes,
+                file_name="modelo_importacao_os.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary",
+                use_container_width=True
+            )
+        except Exception as e:
+            st.error(f"Erro ao gerar modelo: {e}")
     
-    uploaded_os = st.file_uploader("Carregar Planilha de Histórico", type=['xlsx', 'csv'], key="upload_os_hist")
+    st.divider()
+    
+    uploaded_os = st.file_uploader("Carregar Planilha Preenchida", type=['xlsx', 'csv'], key="upload_os_hist")
     
     if uploaded_os:
         try:
@@ -301,7 +359,7 @@ with tab_importar:
             
             st.dataframe(df_up.head(), use_container_width=True)
             
-            if st.button("🚀 Processar Importação Inteligente"):
+            if st.button("🚀 Processar Importação"):
                 df_up.columns = [c.title().strip() for c in df_up.columns]
                 df_up.columns = [c.replace(' ', '_').replace('ç', 'c').replace('ã', 'a') for c in df_up.columns]
 
@@ -325,106 +383,89 @@ with tab_importar:
                     for index, row in df_up.iterrows():
                         progress_bar.progress((index + 1) / total_lines)
                         try:
-                            # --- TRATAMENTO DE FROTA ---
+                            # --- TRATAMENTO FROTA ---
                             raw_frota = row['Frota']
                             try:
-                                if isinstance(raw_frota, float) and raw_frota.is_integer():
-                                    raw_frota = int(raw_frota)
+                                if isinstance(raw_frota, float) and raw_frota.is_integer(): raw_frota = int(raw_frota)
                             except: pass
                             f_nome = str(raw_frota).strip().upper()
                             if f_nome.endswith(".0"): f_nome = f_nome[:-2]
 
                             if f_nome not in map_frota:
-                                lista_erros.append(f"Linha {index+2}: Frota '{f_nome}' não cadastrada.")
+                                lista_erros.append(f"Linha {index+2}: Frota '{f_nome}' não encontrada.")
                                 erros += 1; continue
                             equip_id = map_frota[f_nome]
 
-                            # --- TRATAMENTO DE OPERAÇÃO ---
-                            op_nome_original = str(row['Operacao']).strip()
-                            op_nome_key = op_nome_original.upper()
-                            op_id = map_op.get(op_nome_key)
+                            # --- TRATAMENTO OPERAÇÃO ---
+                            op_nome = str(row['Operacao']).strip()
+                            op_key = op_nome.upper()
+                            op_id = map_op.get(op_key)
                             if not op_id:
+                                # Auto-cadastro simples
                                 try:
-                                    cur_op = conn.cursor()
-                                    cur_op.execute("INSERT INTO tipos_operacao (nome, cor) VALUES (?, ?)", (op_nome_original, '#95A5A6'))
-                                    new_id = cur_op.lastrowid
-                                    map_op[op_nome_key] = new_id
-                                    op_id = new_id
-                                except:
-                                    erros += 1; continue
+                                    cur = conn.cursor()
+                                    cur.execute("INSERT INTO tipos_operacao (nome) VALUES (?)", (op_nome,))
+                                    op_id = cur.lastrowid
+                                    map_op[op_key] = op_id
+                                except: erros += 1; continue
 
                             # --- DADOS ---
                             desc = str(row['Descricao'])
                             local = str(row['Local'])
                             prio = str(row.get('Prioridade', 'Média')).title()
-                            prio = prio if prio in ["Alta", "Média", "Baixa"] else "Média"
+                            if prio not in ["Alta", "Média", "Baixa"]: prio = "Média"
                             try: horim = float(row.get('Horimetro', 0))
                             except: horim = 0.0
                             os_oficial = str(row['OS_Oficial']) if 'OS_Oficial' in df_up.columns and pd.notna(row['OS_Oficial']) else None
                             
-                            data_abertura = None
+                            data_ab = datetime.now(FUSO_HORARIO).replace(tzinfo=None)
                             if 'Data_Abertura' in df_up.columns and pd.notna(row['Data_Abertura']):
-                                try: data_abertura = pd.to_datetime(row['Data_Abertura'], dayfirst=True).to_pydatetime()
+                                try: data_ab = pd.to_datetime(row['Data_Abertura'], dayfirst=True).to_pydatetime()
                                 except: pass
-                            if not data_abertura:
-                                data_abertura = datetime.now(FUSO_HORARIO).replace(tzinfo=None)
-
-                            data_encerramento = None
-                            if 'Data_Encerramento' in df_up.columns and pd.notna(row['Data_Encerramento']):
-                                try: data_encerramento = pd.to_datetime(row['Data_Encerramento'], dayfirst=True).to_pydatetime()
-                                except: pass
-
-                            # --- UPDATE OU INSERT ---
-                            cursor = conn.cursor()
-                            cursor.execute("""
-                                SELECT id, descricao, status FROM ordens_servico 
-                                WHERE equipamento_id = ? AND status != 'Concluído'
-                                ORDER BY id DESC LIMIT 1
-                            """, (equip_id,))
-                            ordem_existente = cursor.fetchone()
                             
-                            if ordem_existente:
-                                id_antigo = ordem_existente[0]
-                                desc_antiga = ordem_existente[1]
-                                
-                                if data_encerramento:
-                                    novo_status = "Concluído"
-                                    nova_desc = desc_antiga + f"\n[Fechamento via Excel]: {desc}"
-                                    conn.execute("""
-                                        UPDATE ordens_servico 
-                                        SET descricao=?, horimetro=?, status=?, data_encerramento=?, tipo_operacao_id=?
-                                        WHERE id=?
-                                    """, (nova_desc, horim, novo_status, data_encerramento, op_id, id_antigo))
+                            data_enc = None
+                            if 'Data_Encerramento' in df_up.columns and pd.notna(row['Data_Encerramento']):
+                                try: data_enc = pd.to_datetime(row['Data_Encerramento'], dayfirst=True).to_pydatetime()
+                                except: pass
+
+                            # --- UPDATE / INSERT ---
+                            cursor = conn.cursor()
+                            cursor.execute("SELECT id, descricao FROM ordens_servico WHERE equipamento_id=? AND status!='Concluído'", (equip_id,))
+                            existente = cursor.fetchone()
+                            
+                            if existente:
+                                id_ant, desc_ant = existente
+                                if data_enc:
+                                    new_desc = desc_ant + f"\n[Fechamento Lote]: {desc}"
+                                    conn.execute("UPDATE ordens_servico SET descricao=?, status='Concluído', data_encerramento=?, horimetro=? WHERE id=?", (new_desc, data_enc, horim, id_ant))
                                     atualizados += 1
                                 else:
-                                    nova_desc = desc_antiga + f"\n[Atualização via Excel]: {desc}"
-                                    conn.execute("UPDATE ordens_servico SET descricao=?, horimetro=? WHERE id=?", (nova_desc, horim, id_antigo))
+                                    new_desc = desc_ant + f"\n[Atualização Lote]: {desc}"
+                                    conn.execute("UPDATE ordens_servico SET descricao=?, horimetro=? WHERE id=?", (new_desc, horim, id_ant))
                                     atualizados += 1
                             else:
-                                status = "Concluído" if data_encerramento else ("Aberto (Parada)" if os_oficial else "Pendente")
-                                # Importante: Importação assume Corretiva, Parada=1, Solicitante=NULL
+                                st_inicial = "Concluído" if data_enc else ("Aberto (Parada)" if os_oficial else "Pendente")
+                                # Importação: Assume Corretiva, Parada e Sem Solicitante
                                 conn.execute("""
-                                    INSERT INTO ordens_servico 
-                                    (data_hora, equipamento_id, local_atendimento, descricao, tipo_operacao_id, status, numero_os_oficial, horimetro, prioridade, data_encerramento, classificacao, maquina_parada, solicitante_id)
+                                    INSERT INTO ordens_servico (data_hora, equipamento_id, local_atendimento, descricao, tipo_operacao_id, status, numero_os_oficial, horimetro, prioridade, data_encerramento, classificacao, maquina_parada, solicitante_id)
                                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Corretiva', 1, NULL)
-                                """, (data_abertura, equip_id, local, desc, op_id, status, os_oficial, horim, prio, data_encerramento))
+                                """, (data_ab, equip_id, local, desc, op_id, st_inicial, os_oficial, horim, prio, data_enc))
                                 criados += 1
-                            
+
                         except Exception as e:
                             erros += 1
-                            lista_erros.append(f"Linha {index+2}: Erro interno ({str(e)})")
+                            lista_erros.append(f"Linha {index+2}: {str(e)}")
 
                     conn.commit()
                     conn.close()
                     
                     if criados > 0 or atualizados > 0:
-                        st.success(f"✅ Concluído! {criados} novas, {atualizados} atualizadas.")
+                        st.success(f"✅ Processado: {criados} novas, {atualizados} atualizadas.")
                         registrar_log("IMPORTAÇÃO", "Lote", f"Novas: {criados}, Atualizadas: {atualizados}")
                     
                     if erros > 0:
-                        st.error(f"❌ {erros} falhas.")
-                        with st.expander("Erros"):
+                        st.error(f"❌ {erros} linhas falharam.")
+                        with st.expander("Ver Detalhes dos Erros"):
                             for erro in lista_erros: st.write(f"- {erro}")
-
-        except Exception as e:
-            st.error(f"Erro ao ler arquivo: {e}")
+                    
+        except Exception as e: st.error(f"Erro arquivo: {e}")
