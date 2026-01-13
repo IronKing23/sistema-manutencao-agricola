@@ -219,7 +219,9 @@ if not df_painel.empty:
     cols_upper = ['frota', 'modelo', 'Gestao', 'Executante', 'status', 'OS_Oficial', 'Operacao', 'Local', 'descricao', 'prioridade']
     for col in cols_upper:
         if col in df_painel.columns:
-            df_painel[col] = df_painel[col].astype(str).str.upper().replace(['NONE', 'NAN'], '-')
+            # Não converter 'status' para maiúsculo aqui para bater com as opções do selectbox
+            if col != 'status':
+                df_painel[col] = df_painel[col].astype(str).str.upper().replace(['NONE', 'NAN'], '-')
 
 # ==============================================================================
 # PAINEL ÚNICO DINÂMICO
@@ -232,8 +234,11 @@ else:
     st.markdown("### 📊 Resumo Operacional")
     
     total = len(df_painel)
-    urgentes = len(df_painel[df_painel['prioridade'] == 'ALTA'])
-    abertos = len(df_painel[df_painel['status'] != 'CONCLUÍDO'])
+    # Ajuste: busca 'ALTA' (se veio do banco em maiúsculo) ou 'Alta'
+    urgentes = len(df_painel[df_painel['prioridade'].str.upper() == 'ALTA'])
+    
+    # Status pode vir misto, normaliza para contagem
+    abertos = len(df_painel[~df_painel['status'].str.upper().isin(['CONCLUÍDO', 'CONCLUIDO'])])
     frotas_unicas = df_painel['frota'].nunique()
 
     c1, c2, c3, c4 = st.columns(4)
@@ -247,7 +252,7 @@ else:
     # 2. ALERTA DE CRÍTICOS (SE EXISTIR)
     if urgentes > 0:
         st.markdown(f"#### 🚨 Atenção: {urgentes} Tickets de Alta Prioridade")
-        df_critico = df_painel[df_painel['prioridade'] == 'ALTA'].copy()
+        df_critico = df_painel[df_painel['prioridade'].str.upper() == 'ALTA'].copy()
         
         st.dataframe(
             df_critico[['Ticket', 'frota', 'Operacao', 'descricao', 'Tempo_Aberto']],
@@ -261,38 +266,92 @@ else:
         )
         st.markdown("---")
 
-    # 3. TABELA PRINCIPAL DO PAINEL
+    # 3. TABELA PRINCIPAL DO PAINEL (EDITÁVEL)
     st.markdown("### 📋 Listagem Geral de Manutenção")
     
     cols = ['Ticket', 'OS_Oficial', 'frota', 'modelo', 'Gestao', 'prioridade', 'status', 'Local', 'Data_Formatada', 'Tempo_Aberto', 'descricao', 'Operacao']
     df_show = df_painel[ [c for c in cols if c in df_painel.columns] ].copy()
 
-    # Configuração robusta e visual da tabela
-    st.dataframe(
+    # --- EDIÇÃO DE STATUS NA TABELA ---
+    # Usamos st.data_editor no lugar de st.dataframe
+    edited_df = st.data_editor(
         df_show,
         use_container_width=True,
         hide_index=True,
+        key="editor_painel_principal",
         column_config={
-            "Ticket": st.column_config.NumberColumn("# Ticket", format="%d", width="small"),
-            "OS_Oficial": st.column_config.TextColumn("OS Oficial", width="small"),
-            "frota": st.column_config.TextColumn("Frota", width="small"),
-            "modelo": st.column_config.TextColumn("Modelo", width="medium"),
-            "Gestao": st.column_config.TextColumn("Gestão", width="medium"),
+            "Ticket": st.column_config.NumberColumn("# Ticket", format="%d", width="small", disabled=True),
+            "OS_Oficial": st.column_config.TextColumn("OS Oficial", width="small", disabled=True),
+            "frota": st.column_config.TextColumn("Frota", width="small", disabled=True),
+            "modelo": st.column_config.TextColumn("Modelo", width="medium", disabled=True),
+            "Gestao": st.column_config.TextColumn("Gestão", width="medium", disabled=True),
             "prioridade": st.column_config.Column(
                 "Prioridade",
                 width="small",
                 help="Urgência do atendimento",
+                disabled=True
             ),
-            "status": st.column_config.Column(
+            # COLUNA EDITÁVEL: STATUS
+            "status": st.column_config.SelectboxColumn(
                 "Status Atual",
                 width="medium",
+                options=["Pendente", "Aberto (Parada)", "Em Andamento", "Aguardando Peças", "Concluído"],
+                required=True,
+                help="Selecione para mudar o status"
             ),
-            "Data_Formatada": st.column_config.TextColumn("Abertura", width="medium"),
-            "Tempo_Aberto": st.column_config.TextColumn("Tempo", width="small"),
-            "descricao": st.column_config.TextColumn("Descrição", width="large"),
-            "Operacao": st.column_config.TextColumn("Tipo", width="medium"),
-        }
+            "Data_Formatada": st.column_config.TextColumn("Abertura", width="medium", disabled=True),
+            "Tempo_Aberto": st.column_config.TextColumn("Tempo", width="small", disabled=True),
+            "descricao": st.column_config.TextColumn("Descrição", width="large", disabled=True),
+            "Operacao": st.column_config.TextColumn("Tipo", width="medium", disabled=True),
+        },
+        disabled=["Ticket", "OS_Oficial", "frota", "modelo", "Gestao", "prioridade", "Data_Formatada", "Tempo_Aberto", "descricao", "Operacao"]
     )
+
+    # --- LÓGICA DE SALVAMENTO AUTOMÁTICO ---
+    # Verifica se houve mudanças comparando com o dataframe original
+    # O Streamlit rerunna o script quando há edição, então comparamos o estado
+    
+    # Identificar linhas alteradas
+    if not df_show.equals(edited_df):
+        # Encontra as diferenças
+        # Como Ticket é único, usamos ele para achar a linha
+        
+        # Converte para dict para facilitar a comparação linha a linha
+        original_dict = df_show.set_index('Ticket')['status'].to_dict()
+        edited_dict = edited_df.set_index('Ticket')['status'].to_dict()
+        
+        alteracoes = []
+        for ticket_id, novo_status in edited_dict.items():
+            status_antigo = original_dict.get(ticket_id)
+            if status_antigo != novo_status:
+                alteracoes.append((ticket_id, novo_status))
+        
+        if alteracoes:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            try:
+                for ticket, status in alteracoes:
+                    # Se for concluído, atualiza data de encerramento também
+                    if status == "Concluído":
+                        dt_fim_atual = datetime.now(FUSO_HORARIO).replace(tzinfo=None)
+                        cursor.execute("UPDATE ordens_servico SET status = ?, data_encerramento = ? WHERE id = ?", (status, dt_fim_atual, ticket))
+                    else:
+                        # Se reabriu ou mudou para outro status, limpa a data de fim (opcional, mas bom pra consistência)
+                        # Ou mantém a data se não quiser perder histórico. Aqui vou limpar para indicar que está aberto.
+                        cursor.execute("UPDATE ordens_servico SET status = ?, data_encerramento = NULL WHERE id = ?", (status, ticket))
+                
+                conn.commit()
+                st.toast(f"✅ {len(alteracoes)} status atualizado(s) com sucesso!", icon="💾")
+                
+                # Pequeno delay para garantir que o toast seja visto antes do rerun
+                import time
+                time.sleep(1)
+                st.rerun()
+                
+            except Exception as e:
+                st.error(f"Erro ao salvar: {e}")
+            finally:
+                conn.close()
 
     st.markdown("<br>", unsafe_allow_html=True)
     
