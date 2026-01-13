@@ -1,57 +1,139 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px 
-from database import get_db_connection
+import sys
+import os
+import pytz
 from datetime import datetime, timedelta
-from utils_pdf import gerar_relatorio_geral
-import pytz 
 
-# --- Configuração Inicial ---
-st.title("🖥️ Painel de Controle de Manutenção Agrícola")
+# --- BLINDAGEM DE IMPORTAÇÃO ---
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from database import get_db_connection
+from utils_pdf import gerar_relatorio_geral
+
+# --- CONFIGURAÇÃO DA PÁGINA ---
+# st.set_page_config deve ser sempre o primeiro comando Streamlit, 
+# mas como esta é uma sub-página, ela herda do app.py. 
+# Se for rodar isolado, descomente a linha abaixo.
+# st.set_page_config(layout="wide", page_title="Painel de Controle")
+
+st.title("🖥️ Painel de Controle de Manutenção")
+st.markdown("---")
 
 # Definição do Fuso Horário Local
 FUSO_HORARIO = pytz.timezone('America/Campo_Grande')
 
-# --- CONFIGURAÇÃO DOS FILTROS ---
-st.sidebar.header("Filtros de Visualização")
+# --- CSS PERSONALIZADO (VISUAL MODERNO) ---
+st.markdown("""
+<style>
+    /* Estilo dos Cards KPI */
+    .kpi-card {
+        background-color: #f8f9fa;
+        border: 1px solid #e9ecef;
+        border-radius: 10px;
+        padding: 20px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        transition: transform 0.2s;
+    }
+    .kpi-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 8px 15px rgba(0,0,0,0.1);
+    }
+    .kpi-title {
+        color: #6c757d;
+        font-size: 0.9rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        margin-bottom: 5px;
+    }
+    .kpi-value {
+        color: #212529;
+        font-size: 2.2rem;
+        font-weight: 800;
+    }
+    .kpi-icon {
+        float: right;
+        font-size: 2rem;
+        opacity: 0.8;
+    }
+    
+    /* Modo Escuro */
+    @media (prefers-color-scheme: dark) {
+        .kpi-card {
+            background-color: #262730;
+            border-color: #3f3f46;
+        }
+        .kpi-title { color: #a1a1aa; }
+        .kpi-value { color: #ffffff; }
+    }
+    
+    /* Badge de Alerta */
+    .pulse-badge {
+        background-color: #ff4b4b;
+        color: white;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 0.7em;
+        font-weight: bold;
+        animation: pulse 2s infinite;
+        vertical-align: middle;
+    }
+    @keyframes pulse {
+        0% { opacity: 1; }
+        50% { opacity: 0.7; }
+        100% { opacity: 1; }
+    }
+</style>
+""", unsafe_allow_html=True)
 
-conn = None
-try:
+# --- FUNÇÃO DE CARD VISUAL ---
+def exibir_kpi(coluna, titulo, valor, icone, cor_borda="#ccc", alerta=False):
+    html_alerta = '<span class="pulse-badge">AÇÃO</span>' if alerta and valor > 0 else ''
+    coluna.markdown(f"""
+    <div class="kpi-card" style="border-left: 5px solid {cor_borda};">
+        <div class="kpi-icon">{icone}</div>
+        <div class="kpi-title">{titulo} {html_alerta}</div>
+        <div class="kpi-value">{valor}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+# --- CARREGAMENTO DE DADOS ---
+@st.cache_data(ttl=60) # Cache de 60 segundos para agilidade
+def carregar_filtros():
     conn = get_db_connection()
-    frotas_list = pd.read_sql_query("SELECT DISTINCT frota FROM equipamentos ORDER BY frota", conn)
-    operacoes_list = pd.read_sql_query("SELECT DISTINCT nome FROM tipos_operacao ORDER BY nome", conn)
-    gestao_list = pd.read_sql_query("SELECT DISTINCT gestao_responsavel FROM equipamentos WHERE gestao_responsavel IS NOT NULL AND gestao_responsavel != '' ORDER BY gestao_responsavel", conn)
-except Exception as e:
-    st.error(f"Erro filtros: {e}")
-    frotas_list = pd.DataFrame(); operacoes_list = pd.DataFrame(); gestao_list = pd.DataFrame()
-finally:
-    if conn: conn.close()
+    try:
+        frotas = pd.read_sql("SELECT DISTINCT frota FROM equipamentos ORDER BY frota", conn)
+        operacoes = pd.read_sql("SELECT DISTINCT nome FROM tipos_operacao ORDER BY nome", conn)
+        gestao = pd.read_sql("SELECT DISTINCT gestao_responsavel FROM equipamentos WHERE gestao_responsavel IS NOT NULL AND gestao_responsavel != '' ORDER BY gestao_responsavel", conn)
+        return frotas, operacoes, gestao
+    finally:
+        conn.close()
 
-status_options = ["Pendente", "Aberto (Parada)", "Em Andamento", "Aguardando Peças", "Concluído"]
-default_selection = ["Pendente", "Aberto (Parada)", "Em Andamento", "Aguardando Peças"]
-filtro_status = st.sidebar.multiselect("Status:", options=status_options, default=default_selection)
-filtro_prioridade = st.sidebar.multiselect("Prioridade:", ["Alta", "Média", "Baixa"])
-filtro_frota = st.sidebar.multiselect("Frota:", options=frotas_list['frota'].tolist())
-filtro_operacao = st.sidebar.multiselect("Tipo Operação:", options=operacoes_list['nome'].tolist())
-filtro_gestao = st.sidebar.multiselect("Gestor:", options=gestao_list['gestao_responsavel'].tolist())
+frotas_df, operacoes_df, gestao_df = carregar_filtros()
 
-st.sidebar.markdown("---")
-try:
-    data_inicio = st.sidebar.date_input("De:", datetime.now() - timedelta(days=30))
-    data_fim = st.sidebar.date_input("Até:", datetime.now())
-except: pass
+# --- BARRA LATERAL (FILTROS) ---
+with st.sidebar:
+    st.header("🔍 Filtros Avançados")
+    
+    with st.expander("🛠️ Status e Prioridade", expanded=True):
+        status_options = ["Pendente", "Aberto (Parada)", "Em Andamento", "Aguardando Peças", "Concluído"]
+        default_status = ["Pendente", "Aberto (Parada)", "Em Andamento", "Aguardando Peças"]
+        filtro_status = st.multiselect("Status", options=status_options, default=default_status)
+        filtro_prioridade = st.multiselect("Prioridade", ["Alta", "Média", "Baixa"])
 
-# --- Query Global (Top Frotas) ---
-query_global = """
-SELECT e.frota as Frota, COUNT(os.id) as Qtd
-FROM ordens_servico os
-JOIN equipamentos e ON os.equipamento_id = e.id
-GROUP BY e.frota
-ORDER BY Qtd DESC LIMIT 10
-"""
+    with st.expander("🚜 Equipamento e Gestão"):
+        filtro_frota = st.multiselect("Frota", options=frotas_df['frota'].tolist())
+        filtro_gestao = st.multiselect("Gestor Responsável", options=gestao_df['gestao_responsavel'].tolist())
+        filtro_operacao = st.multiselect("Tipo de Serviço", options=operacoes_df['nome'].tolist())
 
-# --- Query Principal ---
-query = """
+    st.markdown("### 📅 Período")
+    c1, c2 = st.columns(2)
+    data_inicio = c1.date_input("Início", datetime.now() - timedelta(days=30))
+    data_fim = c2.date_input("Fim", datetime.now())
+
+# --- CONSTRUÇÃO DA QUERY ---
+query_base = """
 SELECT 
     os.id as Ticket,
     os.data_hora as Data,
@@ -74,31 +156,31 @@ JOIN tipos_operacao op ON os.tipo_operacao_id = op.id
 LEFT JOIN funcionarios f ON os.funcionario_id = f.id
 WHERE 1=1 
 """
+
 params = []
+filtros_sql = ""
 
 if filtro_status:
-    query += f" AND os.status IN ({','.join(['?'] * len(filtro_status))})"
+    filtros_sql += f" AND os.status IN ({','.join(['?'] * len(filtro_status))})"
     params.extend(filtro_status)
 if filtro_prioridade: 
-    query += f" AND os.prioridade IN ({','.join(['?'] * len(filtro_prioridade))})"
+    filtros_sql += f" AND os.prioridade IN ({','.join(['?'] * len(filtro_prioridade))})"
     params.extend(filtro_prioridade)
 if filtro_frota:
-    query += f" AND e.frota IN ({','.join(['?'] * len(filtro_frota))})"
+    filtros_sql += f" AND e.frota IN ({','.join(['?'] * len(filtro_frota))})"
     params.extend(filtro_frota)
 if filtro_operacao:
-    query += f" AND op.nome IN ({','.join(['?'] * len(filtro_operacao))})"
+    filtros_sql += f" AND op.nome IN ({','.join(['?'] * len(filtro_operacao))})"
     params.extend(filtro_operacao)
 if filtro_gestao:
-    query += f" AND e.gestao_responsavel IN ({','.join(['?'] * len(filtro_gestao))})"
+    filtros_sql += f" AND e.gestao_responsavel IN ({','.join(['?'] * len(filtro_gestao))})"
     params.extend(filtro_gestao)
 
-data_inicio_dt = datetime.combine(data_inicio, datetime.min.time())
-data_fim_dt = datetime.combine(data_fim, datetime.max.time())
-query += " AND os.data_hora BETWEEN ? AND ?"
-params.extend([data_inicio_dt, data_fim_dt])
+filtros_sql += " AND os.data_hora BETWEEN ? AND ?"
+params.extend([datetime.combine(data_inicio, datetime.min.time()), datetime.combine(data_fim, datetime.max.time())])
 
-# Ordenação por Prioridade
-query += """ 
+# Query Final com Ordenação Inteligente
+query_final = query_base + filtros_sql + """ 
 ORDER BY 
     CASE os.prioridade
         WHEN 'Alta' THEN 1
@@ -109,286 +191,176 @@ ORDER BY
     os.data_hora DESC
 """
 
-conn = None 
-try:
-    conn = get_db_connection()
-    df_painel = pd.read_sql_query(query, conn, params=params)
-    df_frotas_global = pd.read_sql_query(query_global, conn)
-except Exception as e:
-    st.error(f"Erro SQL: {e}")
-    df_painel = pd.DataFrame() 
-    df_frotas_global = pd.DataFrame()
-finally:
-    if conn: conn.close()
+# Query Global para Gráfico de Frotas (Independente de filtros temporais para contexto histórico)
+query_top_frotas = """
+SELECT e.frota as Frota, COUNT(os.id) as Qtd
+FROM ordens_servico os
+JOIN equipamentos e ON os.equipamento_id = e.id
+GROUP BY e.frota
+ORDER BY Qtd DESC LIMIT 10
+"""
 
-# ==============================================================================
-# PROCESSAMENTO DE DADOS (GLOBAL)
-# ==============================================================================
+# --- EXECUÇÃO DAS QUERIES ---
+conn = get_db_connection()
+try:
+    df_painel = pd.read_sql_query(query_final, conn, params=params)
+    df_top_frotas = pd.read_sql_query(query_top_frotas, conn)
+finally:
+    conn.close()
+
+# --- PROCESSAMENTO DOS DADOS ---
 if not df_painel.empty:
+    # Conversão de datas
     df_painel['Data_DT'] = pd.to_datetime(df_painel['Data'], format='mixed', dayfirst=True, errors='coerce')
     fim_dt = pd.to_datetime(df_painel['Fim'], format='mixed', dayfirst=True, errors='coerce')
     
+    # Cálculo de Tempo em Aberto
     agora = datetime.now(FUSO_HORARIO).replace(tzinfo=None)
-    fim_calculo = fim_dt.fillna(agora)
-    df_painel['delta'] = fim_calculo - df_painel['Data_DT']
+    df_painel['delta'] = fim_dt.fillna(agora) - df_painel['Data_DT']
     
-    def formatar_delta(td):
+    def formatar_tempo(td):
         if pd.isnull(td): return "-"
-        try:
-            total_seconds = int(td.total_seconds())
-            if total_seconds < 0: return "0m"
-            days = total_seconds // 86400
-            hours = (total_seconds % 86400) // 3600
-            minutes = ((total_seconds % 86400) % 3600) // 60
-            parts = []
-            if days > 0: parts.append(f"{days}d")
-            if hours > 0: parts.append(f"{hours}h")
-            if minutes > 0: parts.append(f"{minutes}m")
-            return " ".join(parts) if parts else "< 1m"
-        except: return "-"
+        ts = int(td.total_seconds())
+        d = ts // 86400
+        h = (ts % 86400) // 3600
+        m = ((ts % 86400) % 3600) // 60
+        if d > 0: return f"{d}d {h}h"
+        if h > 0: return f"{h}h {m}m"
+        return f"{m}m"
 
-    df_painel['Tempo_Aberto'] = df_painel['delta'].apply(formatar_delta)
+    df_painel['Tempo_Aberto'] = df_painel['delta'].apply(formatar_tempo)
+    df_painel['Data_Formatada'] = df_painel['Data_DT'].dt.strftime('%d/%m %H:%M')
     
-    df_painel['Data'] = df_painel['Data_DT'].dt.strftime('%d/%m/%Y %H:%M').fillna("-")
-    df_painel['Fim'] = fim_dt.dt.strftime('%d/%m/%Y %H:%M').fillna("-")
-    
-    df_painel['prioridade'] = df_painel['prioridade'].fillna("Média")
-    df_painel['horimetro'] = df_painel['horimetro'].fillna(0)
-
-    colunas_texto = ['frota', 'modelo', 'Gestao', 'Executante', 'status', 'OS_Oficial', 'Operacao', 'Local', 'descricao', 'prioridade']
-    for col in colunas_texto:
+    # Tratamento de Strings
+    cols_upper = ['frota', 'modelo', 'Gestao', 'Executante', 'status', 'OS_Oficial', 'Operacao', 'Local', 'descricao', 'prioridade']
+    for col in cols_upper:
         if col in df_painel.columns:
             df_painel[col] = df_painel[col].astype(str).str.upper().replace(['NONE', 'NAN'], '-')
 
-# --- FUNÇÕES DE ESTILO ---
-def hex_to_rgba(hex_code, opacity=0.25):
-    if not hex_code or not isinstance(hex_code, str) or not hex_code.startswith('#'): return None 
-    hex_code = hex_code.lstrip('#')
-    try:
-        rgb = tuple(int(hex_code[i:i+2], 16) for i in (0, 2, 4))
-        return f'rgba({rgb[0]}, {rgb[1]}, {rgb[2]}, {opacity})'
-    except: return None
-
-def colorir_linhas_hibrido(row):
-    operacao = str(row['Operacao']).lower()
-    cor_db = row.get('Cor_Hex')
-    cor_final = hex_to_rgba(cor_db, opacity=0.25)
-    if not cor_final:
-        if 'elet' in operacao: cor_final = 'rgba(33, 150, 243, 0.25)'
-        elif 'mecan' in operacao: cor_final = 'rgba(158, 158, 158, 0.25)'
-        elif 'borrach' in operacao: cor_final = 'rgba(255, 152, 0, 0.25)'   
-        else: cor_final = 'transparent'
-    return [f'background-color: {cor_final}' for _ in row]
-
 # ==============================================================================
-# VISUALIZAÇÃO
+# INTERFACE EM ABAS
 # ==============================================================================
-tab_lista, tab_dash = st.tabs(["📋 Detalhamento (Tabela)", "📊 Visão Geral (Dashboard)"])
-
-colunas_ordem = ['Ticket', 'OS_Oficial', 'frota', 'modelo', 'Gestao', 'prioridade', 'status', 'Local', 'Data', 'Tempo_Aberto', 'descricao', 'Operacao', 'Cor_Hex']
-config_tabela = {
-    "Ticket": st.column_config.NumberColumn("Ticket", width="small", format="%d"),
-    "OS_Oficial": st.column_config.TextColumn("OS Oficial", width="small"),
-    "Tempo_Aberto": st.column_config.TextColumn("Tempo", width="small", help="Tempo decorrido"),
-    "Gestao": st.column_config.TextColumn("Gestão Resp.", width="medium"),
-    "Cor_Hex": None 
-}
+tab_dash, tab_lista = st.tabs(["📊 Visão Geral (Dashboard)", "📋 Detalhamento (Tabela)"])
 
 # ------------------------------------------------------------------------------
-# ABA 1: TABELA DETALHADA
+# ABA 1: DASHBOARD
+# ------------------------------------------------------------------------------
+with tab_dash:
+    if df_painel.empty:
+        st.info("🔎 Nenhum dado encontrado com os filtros atuais.")
+    else:
+        # CÁLCULO DE MÉTRICAS
+        total = len(df_painel)
+        urgentes = len(df_painel[df_painel['prioridade'] == 'ALTA'])
+        abertos = len(df_painel[df_painel['status'] != 'CONCLUÍDO'])
+        frotas_unicas = df_painel['frota'].nunique()
+
+        # EXIBIÇÃO DOS CARDS
+        c1, c2, c3, c4 = st.columns(4)
+        exibir_kpi(c1, "Total Tickets", total, "📋", "#3498db")
+        exibir_kpi(c2, "Alta Prioridade", urgentes, "🔥", "#e74c3c", alerta=True)
+        exibir_kpi(c3, "Em Aberto", abertos, "⏳", "#f1c40f")
+        exibir_kpi(c4, "Frotas Ativas", frotas_unicas, "🚜", "#2ecc71")
+
+        st.markdown("---")
+
+        # SEÇÃO DE FROTAS CRÍTICAS (EXPANSÍVEL)
+        if urgentes > 0:
+            with st.expander(f"🚨 Atenção: {urgentes} Tickets de Alta Prioridade", expanded=True):
+                df_critico = df_painel[df_painel['prioridade'] == 'ALTA'].copy()
+                st.dataframe(
+                    df_critico[['Ticket', 'frota', 'Operacao', 'descricao', 'Tempo_Aberto']],
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Ticket": st.column_config.NumberColumn("#", format="%d", width="small"),
+                        "Tempo_Aberto": "Tempo",
+                        "descricao": "Problema"
+                    }
+                )
+
+        # GRÁFICOS
+        g1, g2 = st.columns(2)
+        
+        with g1:
+            st.subheader("🚜 Top 10 Frotas (Histórico)")
+            if not df_top_frotas.empty:
+                df_top_frotas['Frota'] = df_top_frotas['Frota'].astype(str)
+                fig_bar = px.bar(
+                    df_top_frotas, x='Qtd', y='Frota', text='Qtd', orientation='h',
+                    color='Qtd', color_continuous_scale='Blues'
+                )
+                fig_bar.update_layout(yaxis={'categoryorder':'total ascending'}, xaxis_title=None, yaxis_title=None)
+                st.plotly_chart(fig_bar, use_container_width=True)
+
+        with g2:
+            st.subheader("🔧 Ocorrências por Tipo")
+            df_pie = df_painel['Operacao'].value_counts().reset_index()
+            df_pie.columns = ['Tipo', 'Qtd']
+            fig_pie = px.pie(df_pie, values='Qtd', names='Tipo', hole=0.4, color_discrete_sequence=px.colors.qualitative.Prism)
+            st.plotly_chart(fig_pie, use_container_width=True)
+
+        # TIMELINE INTERATIVA
+        st.subheader("📅 Linha do Tempo de Abertura")
+        df_timeline = df_painel.sort_values('Data_DT')
+        fig_line = px.scatter(
+            df_timeline, x='Data_DT', y='prioridade', color='Operacao',
+            size='Ticket', size_max=15, hover_data=['frota', 'descricao'],
+            color_discrete_sequence=px.colors.qualitative.Bold
+        )
+        fig_line.update_yaxes(categoryorder='array', categoryarray=['BAIXA', 'MÉDIA', 'ALTA'])
+        st.plotly_chart(fig_line, use_container_width=True)
+
+# ------------------------------------------------------------------------------
+# ABA 2: TABELA DETALHADA
 # ------------------------------------------------------------------------------
 with tab_lista:
     if df_painel.empty:
-        st.info("Nenhum atendimento para listar.")
+        st.warning("Sem dados para exibir.")
     else:
-        cols_to_show = [c for c in colunas_ordem if c in df_painel.columns]
-        df_exibicao = df_painel[cols_to_show]
+        # Colunas para exibir
+        cols = ['Ticket', 'OS_Oficial', 'frota', 'modelo', 'Gestao', 'prioridade', 'status', 'Local', 'Data_Formatada', 'Tempo_Aberto', 'descricao', 'Operacao']
+        df_show = df_painel[ [c for c in cols if c in df_painel.columns] ].copy()
 
-        try:
-            df_styled = df_exibicao.style.apply(colorir_linhas_hibrido, axis=1)
-            st.dataframe(df_styled, use_container_width=True, hide_index=True, column_config=config_tabela)
-        except:
-            st.dataframe(df_exibicao, use_container_width=True, hide_index=True)
-        
+        # CONFIGURAÇÃO VISUAL DA TABELA (Highlight)
+        # Transforma colunas de texto em badges coloridos automaticamente
+        st.dataframe(
+            df_show,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Ticket": st.column_config.NumberColumn("# Ticket", format="%d", width="small"),
+                "OS_Oficial": st.column_config.TextColumn("OS Oficial", width="small"),
+                "frota": st.column_config.TextColumn("Frota", width="small"),
+                "modelo": st.column_config.TextColumn("Modelo", width="medium"),
+                "Gestao": st.column_config.TextColumn("Gestão", width="medium"),
+                "prioridade": st.column_config.Column(
+                    "Prioridade",
+                    width="small",
+                    help="Urgência do atendimento",
+                ),
+                "status": st.column_config.Column(
+                    "Status Atual",
+                    width="medium",
+                ),
+                "Data_Formatada": st.column_config.TextColumn("Abertura", width="medium"),
+                "Tempo_Aberto": st.column_config.TextColumn("Tempo", width="small"),
+                "descricao": st.column_config.TextColumn("Descrição", width="large"),
+                "Operacao": st.column_config.TextColumn("Tipo", width="medium"),
+            }
+        )
+
         st.markdown("---")
-        col_dl1, col_dl2 = st.columns(2)
-        with col_dl1:
-            @st.cache_data
-            def convert_df(df): return df.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Baixar CSV", convert_df(df_exibicao), 'relatorio.csv', 'text/csv', use_container_width=True)
-        with col_dl2:
+        
+        # ÁREA DE DOWNLOAD
+        c_csv, c_pdf = st.columns(2)
+        with c_csv:
+            csv = df_show.to_csv(index=False).encode('utf-8')
+            st.download_button("📥 Baixar Planilha (CSV)", csv, "relatorio_manutencao.csv", "text/csv", use_container_width=True)
+        
+        with c_pdf:
             try:
-                pdf_bytes = gerar_relatorio_geral(df_exibicao)
-                st.download_button("🖨️ Baixar PDF (Paisagem)", pdf_bytes, 'relatorio_geral.pdf', 'application/pdf', type='primary', use_container_width=True)
-            except Exception as e: st.error(f"Erro PDF: {e}")
-
-# ------------------------------------------------------------------------------
-# ABA 2: DASHBOARD (UI/UX MODERNIZADA)
-# ------------------------------------------------------------------------------
-with tab_dash:
-    # --- CSS MODERNO PARA OS CARDS ---
-    st.markdown("""
-    <style>
-    /* Cards KPI */
-    .kpi-card {
-        background-color: #f8f9fa;
-        border: 1px solid #e9ecef;
-        border-radius: 10px;
-        padding: 15px 20px;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
-        transition: all 0.3s ease;
-        height: 100%;
-        display: flex;
-        flex-direction: column;
-        justify-content: space-between;
-    }
-    .kpi-card:hover {
-        box-shadow: 0 5px 15px rgba(0,0,0,0.1);
-        transform: translateY(-3px);
-    }
-    .kpi-icon {
-        float: right;
-        font-size: 1.8rem;
-        margin-top: -5px;
-    }
-    .kpi-title {
-        font-size: 0.9rem;
-        color: #6c757d;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        margin-bottom: 5px;
-    }
-    .kpi-value {
-        font-size: 2rem;
-        font-weight: 800;
-        color: #212529;
-    }
-    
-    /* Adaptação Dark Mode */
-    @media (prefers-color-scheme: dark) {
-        .kpi-card {
-            background-color: #262730;
-            border-color: #3f3f46;
-        }
-        .kpi-title { color: #a1a1aa; }
-        .kpi-value { color: #f4f4f5; }
-    }
-    
-    /* Badge Pulsante */
-    @keyframes pulse-red {
-        0% { box-shadow: 0 0 0 0 rgba(255, 82, 82, 0.7); }
-        70% { box-shadow: 0 0 0 10px rgba(255, 82, 82, 0); }
-        100% { box-shadow: 0 0 0 0 rgba(255, 82, 82, 0); }
-    }
-    .badge-pulse {
-        background-color: #EF4444; 
-        color: white; 
-        padding: 4px 10px; 
-        border-radius: 12px; 
-        font-size: 0.75em; 
-        font-weight: bold;
-        animation: pulse-red 2s infinite;
-        display: inline-block;
-        margin-top: 5px;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-
-    # Função auxiliar para desenhar o card
-    def exibir_card(col, titulo, valor, icone, cor_borda, is_urgente=False):
-        # HTML do Card
-        html_content = f"""
-        <div class="kpi-card" style="border-left: 5px solid {cor_borda};">
-            <div>
-                <div class="kpi-title">{titulo} <span class="kpi-icon">{icone}</span></div>
-                <div class="kpi-value">{valor}</div>
-            </div>
-            {f'<div class="badge-pulse">⚠️ AÇÃO NECESSÁRIA</div>' if is_urgente and valor > 0 else ''}
-        </div>
-        """
-        col.markdown(html_content, unsafe_allow_html=True)
-
-    if df_painel.empty:
-        st.warning("Sem dados.")
-    else:
-        col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
-        
-        total = len(df_painel)
-        urgentes = len(df_painel[df_painel['prioridade'].astype(str).str.upper() == 'ALTA'])
-        pendentes = len(df_painel[df_painel['status'].astype(str).str.upper() != 'CONCLUÍDO'])
-        frotas_afetadas = df_painel[df_painel['status'].astype(str).str.upper() != 'CONCLUÍDO']['frota'].nunique()
-        
-        # --- RENDERIZAÇÃO DOS CARDS MODERNOS ---
-        exibir_card(col_kpi1, "Total de Ordens", total, "📋", "#3B82F6") # Azul
-        
-        # Card de Alta Prioridade com Lógica Especial (Botão Fora do HTML)
-        with col_kpi2:
-            exibir_card(col_kpi2, "Alta Prioridade", urgentes, "🔥", "#EF4444", is_urgente=True)
-            if urgentes > 0:
-                if st.button("👁️ Ver Frotas", key="btn_crit_dash", use_container_width=True):
-                    st.session_state['show_criticos'] = not st.session_state.get('show_criticos', False)
-
-        exibir_card(col_kpi3, "Em Aberto", pendentes, "⏳", "#F59E0B") # Laranja
-        exibir_card(col_kpi4, "Frotas Paradas", frotas_afetadas, "🚜", "#10B981") # Verde
-        
-        # --- TABELA DE FROTAS CRÍTICAS ---
-        if st.session_state.get('show_criticos') and urgentes > 0:
-            st.markdown("---")
-            st.markdown("### 🚨 Frotas Críticas (Prioridade Alta)")
-            df_show = df_painel[df_painel['prioridade'].astype(str).str.upper() == 'ALTA'].copy()
-            cols_c = [c for c in colunas_ordem if c in df_show.columns]
-            
-            try:
-                st.dataframe(
-                    df_show[cols_c].style.apply(colorir_linhas_hibrido, axis=1),
-                    use_container_width=True, 
-                    hide_index=True, 
-                    column_config=config_tabela
-                )
-            except: st.dataframe(df_show[cols_c], use_container_width=True)
-            
-            if st.button("Fechar Lista"): st.session_state['show_criticos'] = False; st.rerun()
-            st.markdown("---")
-
-        st.divider()
-        col_graf1, col_graf2 = st.columns(2)
-        
-        with col_graf1:
-            st.markdown("##### 🚜 Top Frotas (Histórico Geral)")
-            if not df_frotas_global.empty:
-                df_frotas_global['Frota'] = df_frotas_global['Frota'].astype(str)
-                fig_bar = px.bar(df_frotas_global, x='Qtd', y='Frota', text='Qtd', color='Qtd', orientation='h')
-                fig_bar.update_yaxes(type='category') 
-                fig_bar.update_layout(yaxis={'categoryorder':'total ascending'})
-                st.plotly_chart(fig_bar, use_container_width=True)
-
-        with col_graf2:
-            st.markdown("##### 🔧 Por Tipo")
-            df_chart_pie = df_painel.groupby('Operacao').agg(Qtd=('Ticket', 'count'), Lista=('frota', lambda x: ",".join(sorted(x.unique())))).reset_index()
-            mapa = dict(zip(df_painel['Operacao'], df_painel['Cor_Hex'])) if 'Cor_Hex' in df_painel.columns else {}
-            fig_pie = px.pie(df_chart_pie, values='Qtd', names='Operacao', color='Operacao', color_discrete_map=mapa, custom_data=['Lista'], hole=0.4)
-            fig_pie.update_traces(hovertemplate="<b>%{label}</b><br>Qtd: %{value}<br>%{customdata[0]}")
-            st.plotly_chart(fig_pie, use_container_width=True)
-
-    st.markdown("##### 📅 Linha do Tempo (Interativa)")
-    with st.container(border=True):
-        if not df_painel.empty:
-            df_timeline = df_painel.copy()
-            df_timeline['Data_DT'] = pd.to_datetime(df_timeline['Data_DT'])
-            mapa = dict(zip(df_timeline['Operacao'], df_timeline['Cor_Hex'])) if 'Cor_Hex' in df_timeline.columns else {}
-            
-            fig_sc = px.scatter(df_timeline, x='Data_DT', y='prioridade', color='Operacao', size='Ticket', size_max=12,
-                hover_data={'Data_DT': '|%d/%m %H:%M', 'prioridade':False, 'Ticket':True, 'frota':True, 'descricao':True}, color_discrete_map=mapa)
-            fig_sc.update_yaxes(categoryorder='array', categoryarray=['BAIXA', 'MÉDIA', 'ALTA'])
-            
-            ev = st.plotly_chart(fig_sc, use_container_width=True, on_select="rerun", selection_mode="points")
-            
-            if ev and len(ev['selection']['points']) > 0:
-                idx = ev['selection']['points'][0]['point_index']
-                row = df_timeline.iloc[idx]
-                st.divider()
-                st.markdown(f"### 🔍 Detalhes #{row['Ticket']}")
-                c1, c2, c3 = st.columns(3)
-                c1.info(f"**Frota:** {row['frota']}"); c2.warning(f"**Tipo:** {row['Operacao']}"); c3.error(f"**Prio:** {row['prioridade']}")
-                st.caption(row['descricao'])
+                pdf_bytes = gerar_relatorio_geral(df_show)
+                st.download_button("🖨️ Imprimir Relatório (PDF)", pdf_bytes, "relatorio_geral.pdf", "application/pdf", type="primary", use_container_width=True)
+            except Exception as e:
+                st.error(f"Erro ao gerar PDF: {e}")
