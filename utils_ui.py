@@ -1,6 +1,5 @@
 import streamlit as st
 
-
 def load_custom_css():
     """Carrega o CSS global com suporte nativo a LIGHT e DARK mode."""
     st.markdown("""
@@ -41,24 +40,37 @@ def load_custom_css():
                 --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
             }
         }
+        
+        /* Força variáveis se o Streamlit injetar classe dark manualmente */
+        [data-theme="dark"] {
+            --bg-color: #0E1117;
+            --sidebar-bg: #161B22;
+            --card-bg: #1F2937;
+            --text-color: #F1F5F9;
+            --text-secondary: #94A3B8;
+            --sidebar-text: #E2E8F0;
+            --border-color: #374151;
+            --input-bg: #111827;
+            --hover-bg: #374151;
+            --primary-color: #22C55E;
+        }
 
         /* --- APLICAÇÃO GLOBAL --- */
         html, body, [class*="css"] {
             font-family: 'Inter', sans-serif;
-        }
-        
-        /* Fundo e Texto Base da Aplicação */
-        .stApp {
             background-color: var(--bg-color);
             color: var(--text-color);
         }
         
-        /* Força a cor do texto para elementos comuns */
+        .stApp {
+            background-color: var(--bg-color);
+        }
+        
+        /* Força cor de texto em elementos markdown */
         p, .stMarkdown, .stText {
             color: var(--text-color) !important;
         }
         
-        /* Legendas (Captions) */
         .stCaption {
             color: var(--text-secondary) !important;
         }
@@ -120,16 +132,15 @@ def load_custom_css():
             line-height: 1.2;
         }
         
-        /* Ícones SVG nos cards */
         .card-icon svg {
             width: 32px;
             height: 32px;
             opacity: 0.9;
-            filter: drop-shadow(0 2px 2px rgba(0,0,0,0.1));
         }
 
-        /* --- BOTÕES --- */
-        .stButton button {
+        /* --- BOTÕES (Incluindo Download) --- */
+        /* Agrupa stButton e stDownloadButton */
+        .stButton button, .stDownloadButton button {
             border-radius: 8px;
             font-weight: 600;
             border: none;
@@ -137,35 +148,37 @@ def load_custom_css():
             padding: 0.5rem 1rem;
             box-shadow: var(--shadow-sm);
         }
+        
         /* Botão Primário */
-        .stButton button[kind="primary"] {
+        .stButton button[kind="primary"], .stDownloadButton button[kind="primary"] {
             background-color: var(--primary-color);
-            color: #FFFFFF !important; /* Sempre branco */
+            color: #FFFFFF !important;
         }
-        .stButton button[kind="primary"]:hover {
+        .stButton button[kind="primary"]:hover, .stDownloadButton button[kind="primary"]:hover {
             filter: brightness(1.1);
             transform: scale(1.01);
             box-shadow: var(--shadow-md);
         }
-        /* Botão Secundário */
-        .stButton button[kind="secondary"] {
+        
+        /* Botão Secundário (CORRIGIDO PARA DOWNLOAD) */
+        .stButton button[kind="secondary"], .stDownloadButton button[kind="secondary"] {
             background-color: var(--card-bg);
             color: var(--text-color);
             border: 1px solid var(--border-color);
         }
-        .stButton button[kind="secondary"]:hover {
+        .stButton button[kind="secondary"]:hover, .stDownloadButton button[kind="secondary"]:hover {
             background-color: var(--hover-bg);
             border-color: var(--text-secondary);
+            color: var(--text-color); /* Garante visibilidade no hover */
         }
 
-        /* --- INPUTS, SELECTBOXES & DATEINPUT --- */
+        /* --- INPUTS & SELECTBOXES --- */
         .stTextInput input, .stSelectbox div[data-baseweb="select"] > div, .stNumberInput input, .stTextArea textarea, .stDateInput input {
             background-color: var(--input-bg) !important;
             color: var(--text-color) !important;
             border: 1px solid var(--border-color) !important;
             border-radius: 8px;
         }
-        /* Dropdown options popup */
         ul[data-testid="stSelectboxVirtualDropdown"] {
             background-color: var(--card-bg) !important;
         }
@@ -173,28 +186,22 @@ def load_custom_css():
             color: var(--text-color) !important;
         }
         
-        /* Foco */
-        .stTextInput input:focus, .stSelectbox div[data-baseweb="select"] > div:focus-within, .stTextArea textarea:focus {
-            border-color: var(--primary-color) !important;
-            box-shadow: 0 0 0 1px var(--primary-color) !important;
-        }
-        /* Labels dos Inputs */
-        .stTextInput label, .stSelectbox label, .stNumberInput label, .stTextArea label, .stDateInput label, .stRadio label {
+        .stTextInput label, .stSelectbox label, .stNumberInput label, .stTextArea label, .stDateInput label {
             color: var(--text-secondary) !important;
             font-weight: 500;
         }
 
-        /* --- TABELAS --- */
-        [data-testid="stDataFrame"] {
+        /* --- TABELAS (Dataframe & Data Editor) --- */
+        /* Alvo stDataFrame e stDataEditor (tabela editável) */
+        [data-testid="stDataFrame"], [data-testid="stDataEditor"] {
             background-color: var(--card-bg);
             border: 1px solid var(--border-color);
             border-radius: 10px;
         }
-        /* Garante cor do texto nas células */
-        [data-testid="stDataFrame"] div[role="grid"] {
+        [data-testid="stDataFrame"] div[role="grid"], [data-testid="stDataEditor"] div[role="grid"] {
             color: var(--text-color);
         }
-        [data-testid="stDataFrame"] thead th {
+        [data-testid="stDataFrame"] thead th, [data-testid="stDataEditor"] thead th {
             background-color: var(--hover-bg) !important;
             color: var(--text-secondary) !important;
             font-weight: 600;
@@ -219,8 +226,6 @@ def load_custom_css():
             color: var(--text-color);
             border: 1px solid var(--border-color);
             border-top: none;
-            border-bottom-left-radius: 8px;
-            border-bottom-right-radius: 8px;
         }
 
         /* --- HEADERS --- */
@@ -237,18 +242,13 @@ def load_custom_css():
 
 def card_kpi(col, titulo, valor, icone="📊", cor_borda="transparent", subtexto=""):
     """Renderiza um card de KPI moderno. Suporta Emoji ou SVG."""
-    # Ajuste de borda para visibilidade em ambos os temas
     if cor_borda in ["#ddd", "#E0E0E0", "transparent", "white"]:
-        cor_borda = "#64748B"  # Slate 500 (visível no dark e light)
+        cor_borda = "#64748B" 
 
-    # Verifica se é SVG
     icon_html = icone
-    # CORREÇÃO CRÍTICA: Remove quebras de linha do SVG para evitar que o Markdown o interprete como código
-    if str(icone).strip().startswith("<svg"):
-        icon_html = str(icone).replace("\n", "").replace("\r", "").replace("    ", " ").strip()
-    else:
+    if not str(icone).strip().startswith("<svg"):
         icon_html = f'<span style="font-size: 1.8rem;">{icone}</span>'
-
+        
     html = f"""
     <div class="ui-card" style="border-left: 4px solid {cor_borda};">
         <div>
