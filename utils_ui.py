@@ -46,18 +46,18 @@ def load_custom_css():
         html, body, [class*="css"] {
             font-family: 'Inter', sans-serif;
         }
-
+        
         /* Fundo e Texto Base da Aplicação */
         .stApp {
             background-color: var(--bg-color);
             color: var(--text-color);
         }
-
+        
         /* Força a cor do texto para elementos comuns */
         p, .stMarkdown, .stText {
             color: var(--text-color) !important;
         }
-
+        
         /* Legendas (Captions) */
         .stCaption {
             color: var(--text-secondary) !important;
@@ -74,7 +74,7 @@ def load_custom_css():
         [data-testid="stSidebar"] p, [data-testid="stSidebar"] span {
             color: var(--sidebar-text);
         }
-
+        
         /* Links de Navegação */
         div[data-testid="stSidebarNav"] a, div[data-testid="stSidebarNav"] span {
             color: var(--sidebar-text) !important;
@@ -103,7 +103,7 @@ def load_custom_css():
             box-shadow: var(--shadow-md);
             border-color: var(--primary-color);
         }
-
+        
         .card-title {
             color: var(--text-secondary);
             font-size: 0.85rem;
@@ -112,14 +112,14 @@ def load_custom_css():
             letter-spacing: 0.05em;
             margin-bottom: 8px;
         }
-
+        
         .card-value {
             color: var(--text-color);
             font-size: 2rem;
             font-weight: 800;
             line-height: 1.2;
         }
-
+        
         /* Ícones SVG nos cards */
         .card-icon svg {
             width: 32px;
@@ -172,7 +172,7 @@ def load_custom_css():
         li[role="option"] {
             color: var(--text-color) !important;
         }
-
+        
         /* Foco */
         .stTextInput input:focus, .stSelectbox div[data-baseweb="select"] > div:focus-within, .stTextArea textarea:focus {
             border-color: var(--primary-color) !important;
@@ -231,45 +231,22 @@ def load_custom_css():
         .stMarkdown hr {
             border-top: 1px solid var(--border-color);
         }
-
-        /* Badge de Alerta */
-        .pulse-badge {
-            background-color: rgba(220, 38, 38, 0.15);
-            color: #F87171; /* Vermelho claro para ler no dark */
-            border: 1px solid #EF4444;
-            padding: 2px 8px;
-            border-radius: 12px;
-            font-size: 0.7em;
-            font-weight: 700;
-            animation: pulse-red 2s infinite;
-            vertical-align: middle;
-            margin-left: 8px;
-        }
-        @media (prefers-color-scheme: light) {
-            .pulse-badge {
-                 background-color: #FEF2F2;
-                 color: #DC2626;
-            }
-        }
-        @keyframes pulse-red {
-            0% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.4); }
-            70% { box-shadow: 0 0 0 6px rgba(220, 38, 38, 0); }
-            100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0); }
-        }
-
     </style>
     """, unsafe_allow_html=True)
 
 
 def card_kpi(col, titulo, valor, icone="📊", cor_borda="transparent", subtexto=""):
     """Renderiza um card de KPI moderno. Suporta Emoji ou SVG."""
-    # Se a cor for muito clara ou transparente, usa a cor da borda padrão
+    # Ajuste de borda para visibilidade em ambos os temas
     if cor_borda in ["#ddd", "#E0E0E0", "transparent", "white"]:
         cor_borda = "#64748B"  # Slate 500 (visível no dark e light)
 
-    # Renderiza ícone (se SVG ou texto)
+    # Verifica se é SVG
     icon_html = icone
-    if not str(icone).strip().startswith("<svg"):
+    # CORREÇÃO CRÍTICA: Remove quebras de linha do SVG para evitar que o Markdown o interprete como código
+    if str(icone).strip().startswith("<svg"):
+        icon_html = str(icone).replace("\n", "").replace("\r", "").replace("    ", " ").strip()
+    else:
         icon_html = f'<span style="font-size: 1.8rem;">{icone}</span>'
 
     html = f"""
