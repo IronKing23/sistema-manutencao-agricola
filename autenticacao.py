@@ -35,8 +35,7 @@ def garantir_tabela_usuarios():
     conn.close()
 
 # --- Gerenciador de Cookies ---
-# Usamos @st.cache_resource para garantir que o gerenciador seja único
-@st.cache_resource(experimental_allow_widgets=True)
+# Removido cache_resource para evitar TypeError, o componente gerencia seu estado
 def get_manager():
     return stx.CookieManager(key="auth_cookie_manager")
 
