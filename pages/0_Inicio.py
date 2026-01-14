@@ -10,12 +10,12 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from database import get_db_connection
 from utils_ui import load_custom_css, card_kpi
-from utils_icons import get_icon  # <--- NOVO IMPORT DOS ÍCONES
+from utils_icons import get_icon
 
 # --- 1. CONFIGURAÇÃO E ESTILO ---
 load_custom_css()
 
-# CSS Específico para esta página (Feed de Alertas e Menu)
+# CSS Específico para esta página (Feed de Alertas e Badges)
 st.markdown("""
 <style>
     /* Card de Alerta Crítico */
@@ -46,7 +46,12 @@ st.markdown("""
         font-size: 0.9rem;
         display: flex;
         align-items: center;
-        gap: 6px; /* Espaço entre ícone e texto */
+        gap: 8px; /* Espaço entre ícone e texto */
+    }
+
+    .alert-title svg {
+        width: 20px;
+        height: 20px;
     }
 
     /* Badge de Tempo */
@@ -66,6 +71,21 @@ st.markdown("""
         color: #374151;
         line-height: 1.4;
     }
+
+    /* Modo Escuro para os Cards de Alerta */
+    @media (prefers-color-scheme: dark) {
+        .alert-card {
+            background-color: #1F2937;
+            border-color: #374151; /* Borda padrão */
+            border-left-color: #EF4444; /* Borda destaque mantém vermelho */
+        }
+        .alert-body { color: #D1D5DB; }
+        .time-badge {
+            background-color: rgba(220, 38, 38, 0.2);
+            color: #FCA5A5;
+            border-color: #EF4444;
+        }
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -74,7 +94,6 @@ st.markdown("""
 def calcular_tempo_atras(dt_obj):
     if pd.isnull(dt_obj): return "-"
     try:
-        # Garante que dt_obj seja datetime
         if isinstance(dt_obj, str):
             dt_obj = pd.to_datetime(dt_obj)
 
@@ -114,7 +133,7 @@ df_alertas = pd.read_sql_query("""
     LIMIT 5
 """, conn)
 
-# Query: Distribuição de Status (Para o Gráfico Novo)
+# Query: Distribuição de Status
 df_status_chart = pd.read_sql_query("""
     SELECT status, COUNT(*) as qtd 
     FROM ordens_servico 
@@ -138,7 +157,6 @@ icon_pend = get_icon("dashboard", color="#3B82F6", size="32")
 card_kpi(c1, "Pendências", qtd_aberta, icon_pend, "#3B82F6")
 
 # Máquinas Paradas (Trator) - Vermelho ou Cinza
-# Se houver paradas, ícone vermelho, senão cinza
 cor_trator = "#EF4444" if qtd_parada > 0 else "#CBD5E1"
 icon_trator = get_icon("tractor", color=cor_trator, size="32")
 card_kpi(c2, "Máquinas Paradas", qtd_parada, icon_trator, cor_trator)
@@ -180,12 +198,11 @@ with col_main:
         if st.button("🗺️ Mapa de Frotas\n\nGeolocalização das máquinas", use_container_width=True):
             st.switch_page("pages/10_Mapa_Atendimentos.py")
 
-    # --- NOVO: GRÁFICO DE GARGALOS ---
+    # --- NOVO: GRÁFICO DE GARGALOS (Raio-X) ---
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown("### 📊 Raio-X da Oficina (Status)")
 
     if not df_status_chart.empty:
-        # Gráfico minimalista de barras horizontais
         fig = px.bar(
             df_status_chart,
             x='qtd', y='status',
@@ -207,18 +224,15 @@ with col_main:
     else:
         st.info("Nenhuma ordem pendente para análise de gargalo.")
 
-# >> COLUNA DIREITA: FEED DE ALERTAS (COM ÍCONES SVG)
+# >> COLUNA DIREITA: FEED DE ALERTAS (COM ÍCONES SVG CORRIGIDOS)
 with col_side:
     st.subheader("🚨 Atenção Requerida")
 
     if df_alertas.empty:
-        st.markdown("""
-        <div style="background-color: #F0FDF4; border: 1px solid #22C55E; border-radius: 8px; padding: 20px; text-align: center; color: #166534;">
-            <div style="font-size: 30px;">🎉</div>
-            <b>Tudo Operando!</b><br>
-            Nenhuma parada crítica.
-        </div>
-        """, unsafe_allow_html=True)
+        # HTML Compactado para evitar erro de renderização
+        st.markdown(
+            """<div style="background-color: #F0FDF4; border: 1px solid #22C55E; border-radius: 8px; padding: 20px; text-align: center; color: #166534;"><div style="font-size: 30px;">🎉</div><b>Tudo Operando!</b><br>Nenhuma parada crítica.</div>""",
+            unsafe_allow_html=True)
     else:
         for _, row in df_alertas.iterrows():
             # Cálculo de Tempo
@@ -227,30 +241,25 @@ with col_side:
             # Definição do Ícone e Cor baseada no tipo de alerta
             if row['maquina_parada'] == 1:
                 # Ícone Stop Vermelho
-                icon_svg = get_icon("stop", color="#DC2626", size="20")
+                icon_svg = get_icon("stop", color="#DC2626", size="20").strip()
                 texto_alerta = "PARADA"
                 cor_titulo = "#991B1B"
             else:
                 # Ícone Fogo Laranja/Vermelho
-                icon_svg = get_icon("fire", color="#EA580C", size="20")
+                icon_svg = get_icon("fire", color="#EA580C", size="20").strip()
                 texto_alerta = "ALTA PRIO."
                 cor_titulo = "#C2410C"
 
-            # HTML do Card com Badge de Tempo e Ícone SVG alinhado
-            st.markdown(f"""
-            <div class="alert-card">
-                <div class="alert-header">
-                    <span class="alert-title" style="color: {cor_titulo};">
-                        {icon_svg} {texto_alerta}
-                    </span>
-                    <span class="time-badge">⏱️ {tempo_decorrido}</span>
-                </div>
-                <div style="font-weight: 600; color: #1F2937; margin-bottom: 4px;">
-                    {row['frota']} - {row['modelo']}
-                </div>
-                <div class="alert-body">{row['descricao'][:55]}...</div>
-            </div>
-            """, unsafe_allow_html=True)
+            # HTML do Card com Badge de Tempo e Ícone SVG
+            # Importante: Sem indentação interna para evitar bugs visuais
+            st.markdown(f"""<div class="alert-card">
+<div class="alert-header">
+<span class="alert-title" style="color: {cor_titulo};">{icon_svg} {texto_alerta}</span>
+<span class="time-badge">⏱️ {tempo_decorrido}</span>
+</div>
+<div style="font-weight: 600; color: #1F2937; margin-bottom: 4px;">{row['frota']} - {row['modelo']}</div>
+<div class="alert-body">{row['descricao'][:55]}...</div>
+</div>""", unsafe_allow_html=True)
 
         if st.button("Ver fila completa →", use_container_width=True):
             st.switch_page("pages/1_Painel_Principal.py")

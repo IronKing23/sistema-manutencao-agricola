@@ -263,11 +263,11 @@ def load_custom_css():
 
 def card_kpi(col, titulo, valor, icone="📊", cor_borda="transparent", subtexto=""):
     """Renderiza um card de KPI moderno. Suporta Emoji ou SVG."""
-    # Ajuste de borda para visibilidade em ambos os temas
+    # Se a cor for muito clara ou transparente, usa a cor da borda padrão
     if cor_borda in ["#ddd", "#E0E0E0", "transparent", "white"]:
         cor_borda = "#64748B"  # Slate 500 (visível no dark e light)
 
-    # Verifica se é SVG
+    # Renderiza ícone (se SVG ou texto)
     icon_html = icone
     if not str(icone).strip().startswith("<svg"):
         icon_html = f'<span style="font-size: 1.8rem;">{icone}</span>'
