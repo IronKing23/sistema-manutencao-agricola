@@ -13,10 +13,9 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from database import get_db_connection
 from utils_pdf import gerar_relatorio_geral
 from utils_ui import load_custom_css, card_kpi
-from utils_icons import get_icon  # <--- NOVO IMPORT
+from utils_icons import get_icon
 
 # --- 1. CONFIGURAÇÃO VISUAL ---
-# Carrega o CSS global (Sidebar, Fontes, Cards)
 load_custom_css()
 
 # --- HEADER COM AÇÕES RÁPIDAS ---
@@ -26,14 +25,12 @@ with col_titulo:
     st.caption("Visão geral estratégica e operacional das ordens de serviço.")
 
 with col_btn_novo:
-    # Espaçamento para alinhar verticalmente com o título
     st.markdown("<div style='height: 20px;'></div>", unsafe_allow_html=True)
     if st.button("➕ Nova Ordem de Serviço", type="primary", use_container_width=True):
         st.switch_page("pages/5_Nova_Ordem_Servico.py")
 
 st.markdown("---")
 
-# Definição do Fuso Horário Local
 FUSO_HORARIO = pytz.timezone('America/Campo_Grande')
 
 
@@ -60,7 +57,6 @@ with st.sidebar:
 
     with st.expander("🛠️ Status e Prioridade", expanded=False):
         status_options = ["Pendente", "Aberto (Parada)", "Em Andamento", "Aguardando Peças", "Concluído"]
-        # Por padrão, não mostra os concluídos para focar no backlog
         default_status = ["Pendente", "Aberto (Parada)", "Em Andamento", "Aguardando Peças"]
         filtro_status = st.multiselect("Status", options=status_options, default=default_status)
         filtro_prioridade = st.multiselect("Prioridade", ["Alta", "Média", "Baixa"])
@@ -120,13 +116,11 @@ if filtro_gestao:
     params.extend(filtro_gestao)
 
 filtros_sql += " AND os.data_hora BETWEEN ? AND ?"
-# Ajuste para pegar o dia inteiro da data final
 params.extend([
     datetime.combine(data_inicio, datetime.min.time()),
     datetime.combine(data_fim, datetime.max.time())
 ])
 
-# Ordenação Inteligente: Prioridade Alta primeiro, depois data mais recente
 query_final = query_base + filtros_sql + """ 
 ORDER BY 
     CASE os.prioridade
@@ -147,21 +141,18 @@ finally:
 
 # --- 6. PROCESSAMENTO DE DADOS ---
 if not df_painel.empty:
-    # Conversão de datas
     df_painel['Data_DT'] = pd.to_datetime(df_painel['Data'], format='mixed', dayfirst=True, errors='coerce')
     fim_dt = pd.to_datetime(df_painel['Fim'], format='mixed', dayfirst=True, errors='coerce')
 
-    # Cálculo de Tempo em Aberto (SLA)
     agora = datetime.now(FUSO_HORARIO).replace(tzinfo=None)
-    # Se não tem data fim, usa 'agora' para calcular tempo decorrido
     df_painel['delta'] = fim_dt.fillna(agora) - df_painel['Data_DT']
 
 
     def formatar_tempo(td):
         if pd.isnull(td): return "-"
         ts = int(td.total_seconds())
-        d = ts // 86400
-        h = (ts % 86400) // 3600
+        d = ts // 86400;
+        h = (ts % 86400) // 3600;
         m = ((ts % 86400) % 3600) // 60
         if d > 0: return f"{d}d {h}h"
         if h > 0: return f"{h}h {m}m"
@@ -171,11 +162,21 @@ if not df_painel.empty:
     df_painel['Tempo_Aberto'] = df_painel['delta'].apply(formatar_tempo)
     df_painel['Data_Formatada'] = df_painel['Data_DT'].dt.strftime('%d/%m %H:%M')
 
-    # Normalização de strings para maiúsculo (exceto status e prioridade para manter compatibilidade com selectbox)
     cols_upper = ['frota', 'modelo', 'Gestao', 'Executante', 'OS_Oficial', 'Operacao', 'Local', 'descricao']
     for col in cols_upper:
         if col in df_painel.columns:
             df_painel[col] = df_painel[col].astype(str).str.upper().replace(['NONE', 'NAN'], '-')
+
+
+# --- FUNÇÃO AUXILIAR DE COR (Para Visualização) ---
+def highlight_type(row):
+    color = row.get('Cor_Hex')
+    if pd.isna(color) or not str(color).startswith('#'):
+        return [''] * len(row)
+    # Aplica cor de fundo na célula 'Operacao' com transparência e borda
+    return [f'background-color: {color}40; border-left: 5px solid {color}' if col == 'Operacao' else '' for col in
+            row.index]
+
 
 # ==============================================================================
 # 7. LAYOUT DO PAINEL (UI/UX)
@@ -192,38 +193,23 @@ else:
 
     c1, c2, c3, c4 = st.columns(4)
 
-    # Total Tickets (Dashboard) - Azul
-    icon_total = get_icon("dashboard", color="#2196F3", size="32")
-    card_kpi(c1, "Total Tickets", total, icon_total, "#2196F3")
+    icon_list = get_icon("dashboard", color="#2196F3", size="32")
+    icon_fire = get_icon("fire", color="#FF5252" if urgentes > 0 else "#E0E0E0", size="32")
+    icon_clock = get_icon("clock", color="#FFC107", size="32")
+    icon_trac = get_icon("tractor", color="#4CAF50", size="32")
 
-    # Alta Prioridade (Fogo) - Vermelho ou Cinza
-    cor_urgente = "#FF5252" if urgentes > 0 else "#E0E0E0"
-    icon_urgente = get_icon("fire", color=cor_urgente, size="32")
-    card_kpi(c2, "Alta Prioridade", urgentes, icon_urgente, cor_urgente)
-
-    # Em Aberto (Relógio) - Amarelo
-    icon_aberto = get_icon("clock", color="#FFC107", size="32")
-    card_kpi(c3, "Em Aberto", abertos, icon_aberto, "#FFC107")
-
-    # Frotas na Oficina (Trator) - Verde
-    icon_frota = get_icon("tractor", color="#4CAF50", size="32")
-    card_kpi(c4, "Frotas na Oficina", frotas_unicas, icon_frota, "#4CAF50")
+    card_kpi(c1, "Total Tickets", total, icon_list, "#2196F3")
+    card_kpi(c2, "Alta Prioridade", urgentes, icon_fire, "#FF5252" if urgentes > 0 else "#E0E0E0")
+    card_kpi(c3, "Em Aberto", abertos, icon_clock, "#FFC107")
+    card_kpi(c4, "Frotas na Oficina", frotas_unicas, icon_trac, "#4CAF50")
 
     st.markdown("<br>", unsafe_allow_html=True)
 
     # --- BLOCO B: ALERTA DE CRÍTICOS ---
     if urgentes > 0:
-        st.markdown(f"""
-        <div style='background-color: #FEF2F2; padding: 15px; border-radius: 8px; 
-                    border-left: 5px solid #FF5252; color: #991B1B; margin-bottom: 20px; 
-                    display: flex; align-items: center; gap: 15px; box-shadow: 0 2px 5px rgba(0,0,0,0.05);'>
-            <span style='font-size: 24px;'>🚨</span>
-            <div>
-                <strong style='font-size: 16px;'>Atenção Necessária</strong><br>
-                Existem <b>{urgentes}</b> ordens de serviço de ALTA prioridade pendentes de resolução.
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(
+            f"""<div style='background-color: #FEF2F2; padding: 15px; border-radius: 8px; border-left: 5px solid #FF5252; color: #991B1B; margin-bottom: 20px; display: flex; align-items: center; gap: 15px; box-shadow: 0 2px 5px rgba(0,0,0,0.05);'><span style='font-size: 24px;'>🚨</span><div><strong style='font-size: 16px;'>Atenção Necessária</strong><br>Existem <b>{urgentes}</b> ordens de serviço de ALTA prioridade pendentes de resolução.</div></div>""",
+            unsafe_allow_html=True)
 
         with st.expander("Visualizar Frotas Críticas", expanded=False):
             df_critico = df_painel[df_painel['prioridade'].str.upper() == 'ALTA'].copy()
@@ -237,176 +223,136 @@ else:
                 }
             )
 
-    # --- BLOCO C: TABELA PRINCIPAL (EDITÁVEL) ---
-    st.subheader("📋 Listagem Geral de Manutenção")
+    # --- BLOCO C: TABELA PRINCIPAL ---
+    c_head, c_toggle = st.columns([4, 1])
+    c_head.subheader("📋 Listagem Geral de Manutenção")
+    # Toggle para Alternar Modos
+    modo_visual = c_toggle.toggle("🎨 Modo Visual", help="Ativa cores nos tipos de serviço (Modo Leitura)")
 
+    # Incluímos 'Cor_Hex' na lista para uso no style, mas ocultamos depois
     cols_view = ['Ticket', 'OS_Oficial', 'frota', 'modelo', 'Gestao', 'prioridade', 'status', 'Local', 'Data_Formatada',
-                 'Tempo_Aberto', 'descricao', 'Operacao']
-    # Garante que só selecionamos colunas que existem
+                 'Tempo_Aberto', 'descricao', 'Operacao', 'Cor_Hex']
     cols_existentes = [c for c in cols_view if c in df_painel.columns]
     df_show = df_painel[cols_existentes].copy()
 
-    # Inserir coluna de seleção no início
     df_show.insert(0, "Selecionar", False)
 
-    # Normaliza prioridade para edição correta
     if 'prioridade' in df_show.columns:
-        df_show['prioridade'] = df_show['prioridade'].str.title()
-        df_show['prioridade'] = df_show['prioridade'].apply(lambda x: x if x in ["Alta", "Média", "Baixa"] else "Média")
+        df_show['prioridade'] = df_show['prioridade'].str.title().apply(
+            lambda x: x if x in ["Alta", "Média", "Baixa"] else "Média")
 
-    # Editor de Dados
-    edited_df = st.data_editor(
-        df_show,
-        use_container_width=True,
-        hide_index=True,
-        key="editor_painel_principal",
-        column_config={
-            # Coluna de Seleção para Ação
-            "Selecionar": st.column_config.CheckboxColumn(
-                "Editar?",
-                width="small",
-                help="Selecione para editar detalhes completos"
-            ),
-            "Ticket": st.column_config.NumberColumn("# Ticket", format="%d", width="small", disabled=True),
-            "OS_Oficial": st.column_config.TextColumn("OS Oficial", width="small", disabled=False, help="Editável"),
-            "frota": st.column_config.TextColumn("Frota", width="small", disabled=True),
-            "modelo": st.column_config.TextColumn("Modelo", width="medium", disabled=True),
-            "Gestao": st.column_config.TextColumn("Gestão", width="medium", disabled=True),
+    # --- MODO DE VISUALIZAÇÃO ---
+    if modo_visual:
+        # Usa st.dataframe para permitir estilização (cores dinâmicas)
+        st.dataframe(
+            df_show.drop(columns=["Selecionar"]).style.apply(highlight_type, axis=1),
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Cor_Hex": None,  # Oculta a coluna de código de cor
+                "Ticket": st.column_config.NumberColumn("# Ticket", format="%d", width="small"),
+                "status": st.column_config.Column("Status", width="medium"),
+                "prioridade": st.column_config.Column("Prioridade", width="small"),
+                # ... outras configurações visuais
+            }
+        )
 
-            "prioridade": st.column_config.SelectboxColumn(
-                "Prioridade",
-                width="small",
-                options=["Alta", "Média", "Baixa"],
-                required=True,
-                help="Mude a urgência do ticket"
-            ),
+    # --- MODO DE EDIÇÃO (PADRÃO) ---
+    else:
+        edited_df = st.data_editor(
+            df_show,
+            use_container_width=True,
+            hide_index=True,
+            key="editor_painel_principal",
+            column_config={
+                "Cor_Hex": None,
+                "Selecionar": st.column_config.CheckboxColumn("Editar?", width="small", help="Marque para editar"),
+                "Ticket": st.column_config.NumberColumn("# Ticket", format="%d", width="small", disabled=True),
+                "OS_Oficial": st.column_config.TextColumn("OS Oficial", width="small", disabled=False),
+                "frota": st.column_config.TextColumn("Frota", width="small", disabled=True),
+                "modelo": st.column_config.TextColumn("Modelo", width="medium", disabled=True),
+                "Gestao": st.column_config.TextColumn("Gestão", width="medium", disabled=True),
 
-            "status": st.column_config.SelectboxColumn(
-                "Status (Clique para Mudar)",
-                width="medium",
-                options=["Pendente", "Aberto (Parada)", "Em Andamento", "Aguardando Peças", "Concluído"],
-                required=True,
-            ),
+                "prioridade": st.column_config.SelectboxColumn("Prioridade", width="small",
+                                                               options=["Alta", "Média", "Baixa"], required=True),
+                "status": st.column_config.SelectboxColumn("Status", width="medium",
+                                                           options=["Pendente", "Aberto (Parada)", "Em Andamento",
+                                                                    "Aguardando Peças", "Concluído"], required=True),
 
-            "Data_Formatada": st.column_config.TextColumn("Abertura", width="medium", disabled=True),
-            "Tempo_Aberto": st.column_config.TextColumn("Tempo", width="small", disabled=True),
-            "descricao": st.column_config.TextColumn("Descrição", width="large", disabled=True),
-            "Operacao": st.column_config.TextColumn("Tipo", width="medium", disabled=True),
-        },
-        # Trava colunas que não devem ser editadas aqui
-        disabled=[c for c in cols_existentes if c not in ['status', 'prioridade', 'OS_Oficial', 'Selecionar']]
-    )
+                "Data_Formatada": st.column_config.TextColumn("Abertura", width="medium", disabled=True),
+                "Tempo_Aberto": st.column_config.TextColumn("Tempo", width="small", disabled=True),
+                "descricao": st.column_config.TextColumn("Descrição", width="large", disabled=True),
+                "Operacao": st.column_config.TextColumn("Tipo", width="medium", disabled=True),
+            },
+            disabled=[c for c in cols_existentes if c not in ['status', 'prioridade', 'OS_Oficial', 'Selecionar']]
+        )
 
-    # --- LÓGICA DE AÇÃO PÓS-SELEÇÃO ---
-    # Verifica se alguma linha foi selecionada
-    rows_selected = edited_df[edited_df["Selecionar"]]
-
-    if not rows_selected.empty:
-        # Pega o primeiro item selecionado (caso usuário marque vários)
-        selected_ticket = rows_selected.iloc[0]["Ticket"]
-        selected_frota = rows_selected.iloc[0]["frota"]
-
-        # Mostra container de ação em destaque
-        with st.container(border=True):
-            col_msg, col_action = st.columns([3, 1])
-            with col_msg:
-                st.info(f"🖊️ **Ticket #{selected_ticket} ({selected_frota})** selecionado para edição detalhada.")
-            with col_action:
-                if st.button("Ir para Gerenciamento 🚀", type="primary", use_container_width=True):
-                    # Salva o ID na sessão para a página de gerenciamento ler
-                    st.session_state['ticket_para_editar'] = int(selected_ticket)
+        # AÇÃO PÓS-SELEÇÃO
+        rows_selected = edited_df[edited_df["Selecionar"]]
+        if not rows_selected.empty:
+            sel_tk = int(rows_selected.iloc[0]["Ticket"])
+            sel_fr = rows_selected.iloc[0]["frota"]
+            with st.container(border=True):
+                cm, cb = st.columns([3, 1])
+                cm.info(f"🖊️ **Ticket #{sel_tk} ({sel_fr})** selecionado.")
+                if cb.button("🚀 Ir para Gerenciamento", type="primary", use_container_width=True):
+                    st.session_state['ticket_para_editar'] = int(sel_tk)
                     st.switch_page("pages/6_Gerenciar_Atendimento.py")
 
-    # --- LÓGICA DE SALVAMENTO AUTOMÁTICO (MULTICOLUNA) ---
-    # Compara ignorando a coluna 'Selecionar'
-    df_data_orig = df_show.drop(columns=["Selecionar"])
-    df_data_edit = edited_df.drop(columns=["Selecionar"])
+        # SALVAMENTO AUTOMÁTICO
+        df_orig = df_show.drop(columns=["Selecionar"])
+        df_new = edited_df.drop(columns=["Selecionar"])
 
-    if not df_data_orig.equals(df_data_edit):
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        try:
-            dict_orig = df_data_orig.set_index('Ticket').to_dict('index')
-            dict_edit = df_data_edit.set_index('Ticket').to_dict('index')
+        if not df_orig.equals(df_new):
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            try:
+                dict_orig = df_orig.set_index('Ticket').to_dict('index')
+                dict_edit = df_new.set_index('Ticket').to_dict('index')
 
-            alteracoes_count = 0
+                alt = 0
+                for ticket_id, row_edit in dict_edit.items():
+                    row_orig = dict_orig.get(ticket_id)
+                    if (row_edit['status'] != row_orig['status']) or \
+                            (row_edit['prioridade'] != row_orig['prioridade']) or \
+                            (row_edit['OS_Oficial'] != row_orig['OS_Oficial']):
 
-            for ticket_id, row_edit in dict_edit.items():
-                row_orig = dict_orig.get(ticket_id)
+                        ups = ["status=?", "prioridade=?", "numero_os_oficial=?"]
+                        vals = [row_edit['status'], row_edit['prioridade'], row_edit['OS_Oficial']]
 
-                # Verifica mudanças
-                novo_status = row_edit.get('status')
-                nova_prio = row_edit.get('prioridade')
-                nova_os = row_edit.get('OS_Oficial')
+                        if row_edit['status'] == "Concluído" and row_orig['status'] != "Concluído":
+                            ups.append("data_encerramento=?")
+                            vals.append(datetime.now(FUSO_HORARIO).replace(tzinfo=None))
+                        elif row_edit['status'] != "Concluído" and row_orig['status'] == "Concluído":
+                            ups.append("data_encerramento=NULL")
 
-                status_mudou = novo_status != row_orig.get('status')
-                prio_mudou = nova_prio != row_orig.get('prioridade')
-                os_mudou = nova_os != row_orig.get('OS_Oficial')
+                        vals.append(ticket_id)
+                        cursor.execute(f"UPDATE ordens_servico SET {', '.join(ups)} WHERE id=?", tuple(vals))
+                        alt += 1
 
-                if status_mudou or prio_mudou or os_mudou:
-                    updates = []
-                    params_update = []
+                if alt > 0:
+                    conn.commit()
+                    st.toast(f"✅ {alt} registro(s) salvo(s)!", icon="💾")
+                    import time;
 
-                    if status_mudou:
-                        updates.append("status = ?")
-                        params_update.append(novo_status)
-                        if novo_status == "Concluído":
-                            updates.append("data_encerramento = ?")
-                            params_update.append(datetime.now(FUSO_HORARIO).replace(tzinfo=None))
-                        elif row_orig.get('status') == "Concluído" and novo_status != "Concluído":
-                            updates.append("data_encerramento = NULL")
-
-                    if prio_mudou:
-                        updates.append("prioridade = ?")
-                        params_update.append(nova_prio)
-
-                    if os_mudou:
-                        updates.append("numero_os_oficial = ?")
-                        params_update.append(nova_os)
-
-                    if updates:
-                        sql = f"UPDATE ordens_servico SET {', '.join(updates)} WHERE id = ?"
-                        params_update.append(ticket_id)
-                        cursor.execute(sql, tuple(params_update))
-                        alteracoes_count += 1
-
-            if alteracoes_count > 0:
-                conn.commit()
-                st.toast(f"✅ {alteracoes_count} registro(s) atualizado(s)!", icon="💾")
-                import time;
-
-                time.sleep(1);
-                st.rerun()
-
-        except Exception as e:
-            st.error(f"Erro ao salvar alterações: {e}")
-        finally:
-            conn.close()
+                    time.sleep(1);
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Erro: {e}")
+            finally:
+                conn.close()
 
     st.markdown("<br>", unsafe_allow_html=True)
 
     # 4. ÁREA DE DOWNLOAD
     c_csv, c_pdf = st.columns(2)
     with c_csv:
-        csv = df_show.drop(columns=["Selecionar"]).to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="📥 Baixar Planilha (CSV)",
-            data=csv,
-            file_name="relatorio_manutencao.csv",
-            mime="text/csv",
-            use_container_width=True
-        )
-
+        csv = df_show.drop(columns=["Selecionar"], errors='ignore').to_csv(index=False).encode('utf-8')
+        st.download_button("📥 Baixar Planilha (CSV)", csv, "relatorio.csv", "text/csv", use_container_width=True)
     with c_pdf:
         try:
-            pdf_bytes = gerar_relatorio_geral(df_show.drop(columns=["Selecionar"]))
-            st.download_button(
-                label="🖨️ Imprimir Relatório (PDF)",
-                data=pdf_bytes,
-                file_name="relatorio_geral.pdf",
-                mime="application/pdf",
-                type="primary",
-                use_container_width=True
-            )
-        except Exception as e:
-            st.error(f"Erro ao gerar PDF: {e}")
+            pdf_bytes = gerar_relatorio_geral(df_show.drop(columns=["Selecionar"], errors='ignore'))
+            st.download_button("🖨️ Imprimir Relatório (PDF)", pdf_bytes, "relatorio.pdf", "application/pdf",
+                               type="primary", use_container_width=True)
+        except:
+            pass
