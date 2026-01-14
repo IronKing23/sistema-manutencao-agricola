@@ -4,11 +4,12 @@ import os
 import sys
 
 # --- BLINDAGEM DE CAMINHO ---
-sys.path.append(os.path.dirname(__file__))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__))))
 
 # Importa módulos internos
 import autenticacao
-from utils_ui import load_custom_css  # <--- NOVO IMPORT DE ESTILO
+from utils_ui import load_custom_css  # Importa estilos globais
+from utils_icons import get_icon  # <--- NOVO IMPORT DOS ÍCONES
 
 # --- 1. CONFIGURAÇÃO INICIAL (Deve ser a primeira linha) ---
 st.set_page_config(
@@ -79,12 +80,15 @@ pg = st.navigation({
 })
 
 with st.sidebar:
-    # Cabeçalho da Sidebar (Logo)
-    st.markdown("""
-    <div style="text-align: center; padding: 20px 0; border-bottom: 1px solid #333; margin-bottom: 15px;">
-        <div style="font-size: 42px; line-height: 1;">🚜</div>
-        <h2 style="color: white; margin: 5px 0 0 0; font-size: 18px; font-weight: 700;">Controle Agrícola</h2>
-        <p style="color: #666; font-size: 11px; margin: 0; text-transform: uppercase; letter-spacing: 1px;">Gestão de Frotas</p>
+    # --- CABEÇALHO COM ÍCONE SVG ---
+    # Gera o ícone do trator em verde (#2E7D32) e tamanho grande (48px)
+    logo_svg = get_icon("tractor", color="#2E7D32", size="48")
+
+    st.markdown(f"""
+    <div style="text-align: center; padding: 20px 0; border-bottom: 1px solid #E2E8F0; margin-bottom: 15px;">
+        <div style="margin-bottom: 8px;">{logo_svg}</div>
+        <h2 style="color: #0F172A; margin: 0; font-size: 18px; font-weight: 700;">Controle Agrícola</h2>
+        <p style="color: #64748B; font-size: 11px; margin: 0; text-transform: uppercase; letter-spacing: 1px;">Gestão de Frotas</p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -100,8 +104,8 @@ with st.sidebar:
 
     if "user_nome" in st.session_state:
         st.markdown(f"""
-        <div style='text-align: center; color: #666; font-size: 12px; margin-top: 10px;'>
-            Usuário: <b style='color: #ddd;'>{st.session_state['user_nome']}</b>
+        <div style='text-align: center; color: #64748B; font-size: 12px; margin-top: 10px;'>
+            Usuário: <b style='color: #1E293B;'>{st.session_state['user_nome']}</b>
         </div>
         """, unsafe_allow_html=True)
 

@@ -12,13 +12,14 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from database import get_db_connection
 from utils_pdf import gerar_relatorio_geral
-from utils_ui import load_custom_css, card_kpi  # Importa o motor de estilo centralizado
+from utils_ui import load_custom_css, card_kpi
+from utils_icons import get_icon  # <--- NOVO IMPORT
 
 # --- 1. CONFIGURAÇÃO VISUAL ---
 # Carrega o CSS global (Sidebar, Fontes, Cards)
 load_custom_css()
 
-# --- HEADER COM AÇÕES RÁPIDAS (NOVO) ---
+# --- HEADER COM AÇÕES RÁPIDAS ---
 col_titulo, col_btn_novo = st.columns([3, 1])
 with col_titulo:
     st.title("🖥️ Painel de Controle")
@@ -183,19 +184,30 @@ if not df_painel.empty:
 if df_painel.empty:
     st.info("🔎 Nenhum dado encontrado com os filtros atuais.")
 else:
-    # --- BLOCO A: KPIs (CARDS) ---
+    # --- BLOCO A: KPIs (CARDS COM SVG) ---
     total = len(df_painel)
-    # Conta prioridade ALTA ou Alta (independente do case)
     urgentes = len(df_painel[df_painel['prioridade'].str.upper() == 'ALTA'])
-    # Conta tudo que não está concluído
     abertos = len(df_painel[~df_painel['status'].str.upper().isin(['CONCLUÍDO', 'CONCLUIDO'])])
     frotas_unicas = df_painel['frota'].nunique()
 
     c1, c2, c3, c4 = st.columns(4)
-    card_kpi(c1, "Total Tickets", total, "📋", "#2196F3")  # Azul
-    card_kpi(c2, "Alta Prioridade", urgentes, "🔥", "#FF5252" if urgentes > 0 else "#E0E0E0")  # Vermelho
-    card_kpi(c3, "Em Aberto", abertos, "⏳", "#FFC107")  # Amarelo
-    card_kpi(c4, "Frotas na Oficina", frotas_unicas, "🚜", "#4CAF50")  # Verde
+
+    # Total Tickets (Dashboard) - Azul
+    icon_total = get_icon("dashboard", color="#2196F3", size="32")
+    card_kpi(c1, "Total Tickets", total, icon_total, "#2196F3")
+
+    # Alta Prioridade (Fogo) - Vermelho ou Cinza
+    cor_urgente = "#FF5252" if urgentes > 0 else "#E0E0E0"
+    icon_urgente = get_icon("fire", color=cor_urgente, size="32")
+    card_kpi(c2, "Alta Prioridade", urgentes, icon_urgente, cor_urgente)
+
+    # Em Aberto (Relógio) - Amarelo
+    icon_aberto = get_icon("clock", color="#FFC107", size="32")
+    card_kpi(c3, "Em Aberto", abertos, icon_aberto, "#FFC107")
+
+    # Frotas na Oficina (Trator) - Verde
+    icon_frota = get_icon("tractor", color="#4CAF50", size="32")
+    card_kpi(c4, "Frotas na Oficina", frotas_unicas, icon_frota, "#4CAF50")
 
     st.markdown("<br>", unsafe_allow_html=True)
 
@@ -234,7 +246,7 @@ else:
     cols_existentes = [c for c in cols_view if c in df_painel.columns]
     df_show = df_painel[cols_existentes].copy()
 
-    # [MELHORIA] Inserir coluna de seleção no início
+    # Inserir coluna de seleção no início
     df_show.insert(0, "Selecionar", False)
 
     # Normaliza prioridade para edição correta
@@ -285,7 +297,7 @@ else:
         disabled=[c for c in cols_existentes if c not in ['status', 'prioridade', 'OS_Oficial', 'Selecionar']]
     )
 
-    # --- [MELHORIA] LÓGICA DE AÇÃO PÓS-SELEÇÃO ---
+    # --- LÓGICA DE AÇÃO PÓS-SELEÇÃO ---
     # Verifica se alguma linha foi selecionada
     rows_selected = edited_df[edited_df["Selecionar"]]
 
