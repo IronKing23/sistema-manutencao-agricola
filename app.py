@@ -73,6 +73,7 @@ paginas_config = [
 
     # Operacional
     ("pages/5_Nova_Ordem_Servico.py", "Nova O.S.", "📝", False),
+    ("pages/16_Controle_Preventivas.py", "Controle Preventivas", "🛡️", False),  # <--- ADICIONE ESTA LINHA AQUI
     ("pages/6_Gerenciar_Atendimento.py", "Gerenciar O.S.", "🔄", False),
     ("pages/11_Quadro_Avisos.py", "Mural de Avisos", "📌", False),
     ("pages/13_Comunicacao.py", "Central WhatsApp", "📱", False),
