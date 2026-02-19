@@ -34,13 +34,13 @@ load_custom_css()
 icon_main = get_icon("dashboard", "#2196F3", "36")
 ui_header(
     title="Relatório Gerencial de Custos",
-    subtitle="Análise de consumo de materiais por Centro de Custo. Visão gráfica, Curva ABC e relatórios para impressão.",
+    subtitle="Análise de consumo de materiais e serviços de terceiros por Centro de Custo.",
     icon=icon_main
 )
 
 
 # ==============================================================================
-# LÓGICA DE PROCESSAMENTO
+# LÓGICA DE PROCESSAMENTO E PDF
 # ==============================================================================
 
 def limpar_numero(valor):
@@ -54,6 +54,10 @@ def formatar_moeda(valor):
 
 
 class RelatorioPDF(FPDF):
+    def __init__(self, titulo_relatorio="Relatorio de Custos, Cedro", *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.titulo_relatorio = titulo_relatorio
+
     def header(self):
         caminho_logo = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logo_cedro.png")
         if not os.path.exists(caminho_logo):
@@ -64,7 +68,7 @@ class RelatorioPDF(FPDF):
 
         self.set_font('Arial', 'B', 14)
         self.set_text_color(50, 50, 50)
-        titulo = 'Relatorio Consumo de Materiais, Cedro'.encode('latin-1', 'replace').decode('latin-1')
+        titulo = self.titulo_relatorio.encode('latin-1', 'replace').decode('latin-1')
         self.cell(0, 10, titulo, 0, 1, 'C')
 
         self.set_draw_color(200, 200, 200)
@@ -85,7 +89,7 @@ class RelatorioPDF(FPDF):
 
 
 @st.cache_data(show_spinner="Processando arquivos e gerando relatórios...", ttl=600)
-def processar_e_gerar_relatorios(df, data_inicio, data_fim):
+def processar_e_gerar_relatorios(df, data_inicio, data_fim, nome_relatorio, label_item):
     df['DATA_UTILIZACAO'] = pd.to_datetime(df['DATA_UTILIZACAO'], dayfirst=True, errors='coerce')
     df = df.dropna(subset=['DATA_UTILIZACAO', 'CENTRO_CUSTO'])
 
@@ -94,7 +98,8 @@ def processar_e_gerar_relatorios(df, data_inicio, data_fim):
 
     excel_io = io.BytesIO()
 
-    pdf = RelatorioPDF()
+    # Passa o título dinâmico para o PDF
+    pdf = RelatorioPDF(titulo_relatorio=nome_relatorio)
     pdf.set_margins(10, 10, 10)
     pdf.set_auto_page_break(auto=True, margin=15)
 
@@ -133,34 +138,34 @@ def processar_e_gerar_relatorios(df, data_inicio, data_fim):
         pdf.set_font('Arial', 'B', 11)
         pdf.cell(0, 6, "1. Custo Total no Periodo:", 0, 1)
         pdf.set_font('Arial', '', 10)
-        pdf.cell(0, 6, f"   A soma de todos os materiais consumidos foi de {formatar_moeda(total_gasto_resumo)}.", 0, 1)
+        pdf.cell(0, 6, f"   A soma total apurada no periodo foi de {formatar_moeda(total_gasto_resumo)}.", 0, 1)
         pdf.ln(2)
 
         pdf.set_font('Arial', 'B', 11)
         pdf.cell(0, 6, "2. Principal Centro de Custo:", 0, 1)
         pdf.set_font('Arial', '', 10)
-        pdf.cell(0, 6, f"   O setor '{maior_cc_resumo}' liderou o consumo financeiro.", 0, 1)
+        pdf.cell(0, 6, f"   O setor '{maior_cc_resumo}' liderou os gastos financeiros.", 0, 1)
         pdf.cell(0, 6,
                  f"   Responsavel por {formatar_moeda(maior_valor_resumo)} ({percentual_maior_resumo:.1f}% do total).",
                  0, 1)
         pdf.ln(2)
 
         pdf.set_font('Arial', 'B', 11)
-        pdf.cell(0, 6, "3. Material de Maior Impacto:", 0, 1)
+        pdf.cell(0, 6, f"3. {label_item} de Maior Impacto:", 0, 1)
         pdf.set_font('Arial', '', 10)
-        pdf.cell(0, 6, f"   O item mais custoso foi '{maior_mat_resumo[:60]}...',", 0, 1)
+        pdf.cell(0, 6, f"   O item/servico mais custoso foi '{maior_mat_resumo[:55]}...',", 0, 1)
         pdf.cell(0, 6, f"   totalizando {formatar_moeda(maior_mat_valor_resumo)} em gastos.", 0, 1)
         pdf.ln(8)
 
-        # --- NOVA SEÇÃO: TOP 20 MATERIAIS GERAIS NA CAPA ---
+        # --- NOVA SEÇÃO: TOP 20 GERAL NA CAPA ---
         pdf.set_font('Arial', 'B', 12)
         pdf.set_text_color(22, 102, 53)
-        pdf.cell(0, 8, "Top 20 Materiais Mais Consumidos (Visao Global)", 0, 1)
+        pdf.cell(0, 8, f"Top 20 {label_item}s de Maior Custo (Visao Global)", 0, 1)
 
         pdf.set_font('Arial', 'B', 9)
         pdf.set_text_color(0, 0, 0)
         pdf.set_fill_color(230, 240, 230)
-        pdf.cell(115, 6, " Material", 1, 0, 'L', fill=True)
+        pdf.cell(115, 6, f" {label_item}", 1, 0, 'L', fill=True)
         pdf.cell(35, 6, " Centro de Custo", 1, 0, 'C', fill=True)
         pdf.cell(40, 6, " Valor Total", 1, 1, 'R', fill=True)
 
@@ -187,7 +192,7 @@ def processar_e_gerar_relatorios(df, data_inicio, data_fim):
             df_centro = df[df['CENTRO_CUSTO'] == centro]
 
             mask_periodo = (df_centro['DATA_UTILIZACAO'].dt.date >= data_inicio) & (
-                        df_centro['DATA_UTILIZACAO'].dt.date <= data_fim)
+                    df_centro['DATA_UTILIZACAO'].dt.date <= data_fim)
             df_periodo = df_centro[mask_periodo]
 
             if df_periodo.empty: continue
@@ -256,7 +261,7 @@ def processar_e_gerar_relatorios(df, data_inicio, data_fim):
                 top_20 = materiais_agrupados.sort_values('VALOR_TOTAL', ascending=False).head(20)
 
                 data_str = pd.to_datetime(dia).strftime('%d/%m/%Y')
-                linhas_excel.append({'Material': f'--- DATA: {data_str} ---', 'Quantidade': '', 'Valor Total': ''})
+                linhas_excel.append({f'{label_item}': f'--- DATA: {data_str} ---', 'Quantidade': '', 'Valor Total': ''})
 
                 pdf.set_font('Arial', 'B', 10)
                 pdf.set_fill_color(230, 240, 230)
@@ -264,7 +269,7 @@ def processar_e_gerar_relatorios(df, data_inicio, data_fim):
                 pdf.cell(0, 6, f" DATA: {data_str} (Top 20)", 1, 1, 'L', fill=True)
 
                 pdf.set_font('Arial', 'B', 8)
-                pdf.cell(125, 5, " Material", 1)
+                pdf.cell(125, 5, f" {label_item}", 1)
                 pdf.cell(25, 5, " Quantidade", 1, 0, 'C')
                 pdf.cell(40, 5, " Valor Total", 1, 1, 'R')
 
@@ -277,9 +282,9 @@ def processar_e_gerar_relatorios(df, data_inicio, data_fim):
                     pdf.cell(40, 5, f"{formatar_moeda(mat['VALOR_TOTAL'])} ", 1, 1, 'R')
 
                     linhas_excel.append(
-                        {'Material': mat['MATERIAL'], 'Quantidade': mat['QTD'], 'Valor Total': mat['VALOR_TOTAL']})
+                        {f'{label_item}': mat['MATERIAL'], 'Quantidade': mat['QTD'], 'Valor Total': mat['VALOR_TOTAL']})
 
-                linhas_excel.append({'Material': '', 'Quantidade': '', 'Valor Total': ''})
+                linhas_excel.append({f'{label_item}': '', 'Quantidade': '', 'Valor Total': ''})
                 pdf.ln(3)
 
             if linhas_excel:
@@ -304,7 +309,7 @@ def processar_e_gerar_relatorios(df, data_inicio, data_fim):
         pdf.set_text_color(50, 50, 50)
         texto_abc = (
             "A Curva ABC e um metodo de categorizacao de custos baseado no principio de Pareto (80/20). "
-            "Os materiais classificados como 'Classe A' representam cerca de 80% do valor total consumido no periodo, "
+            "Os itens classificados como 'Classe A' representam cerca de 80% do valor total consumido no periodo, "
             "sendo os itens de maior impacto financeiro e que exigem controle e negociacao rigorosos por parte da gestao. "
             "Abaixo apresentamos o grafico e a classificacao dos 20 principais itens ofensores."
         )
@@ -316,18 +321,16 @@ def processar_e_gerar_relatorios(df, data_inicio, data_fim):
             fig, ax1 = plt.subplots(figsize=(8.5, 3.5))
             top_30_pareto = df_pareto.head(30)
 
-            # Eixo 1: Barras de Valor
             ax1.bar(range(len(top_30_pareto)), top_30_pareto['VALOR_TOTAL'], color='#166635', alpha=0.8)
             ax1.set_ylabel('Valor (R$)', color='#166635', fontsize=9)
             ax1.tick_params(axis='y', labelcolor='#166635', labelsize=8)
-            ax1.set_xticks([])  # Oculta os nomes no eixo X para não poluir
+            ax1.set_xticks([])
 
             def formato_moeda_abc(x, pos):
                 return f"R$ {x:,.0f}".replace(',', 'X').replace('.', ',').replace('X', '.')
 
             ax1.yaxis.set_major_formatter(ticker.FuncFormatter(formato_moeda_abc))
 
-            # Eixo 2: Linha de Percentual
             ax2 = ax1.twinx()
             ax2.plot(range(len(top_30_pareto)), top_30_pareto['% Acumulado'], color='#F59E0B', marker='D', ms=3,
                      linewidth=2)
@@ -350,7 +353,7 @@ def processar_e_gerar_relatorios(df, data_inicio, data_fim):
         pdf.set_font('Arial', 'B', 9)
         pdf.set_fill_color(230, 240, 230)
         pdf.set_text_color(0, 0, 0)
-        pdf.cell(105, 6, " Material", 1, 0, 'L', fill=True)
+        pdf.cell(105, 6, f" {label_item}", 1, 0, 'L', fill=True)
         pdf.cell(20, 6, " Classe", 1, 0, 'C', fill=True)
         pdf.cell(25, 6, " % Acumulado", 1, 0, 'C', fill=True)
         pdf.cell(40, 6, " Valor Total", 1, 1, 'R', fill=True)
@@ -396,7 +399,8 @@ if not MATPLOTLIB_AVAILABLE:
 
 with st.container(border=True):
     st.markdown("##### 📂 Fonte de Dados")
-    arquivo_upload = st.file_uploader("Selecione a base de materiais (Planilha Excel)", type=['xlsx', 'xls', 'csv'])
+    arquivo_upload = st.file_uploader("Selecione a base de materiais/serviços (Planilha Excel)",
+                                      type=['xlsx', 'xls', 'csv'])
 
 if arquivo_upload:
     df_lido = None
@@ -421,6 +425,12 @@ if arquivo_upload:
                 st.error(f"Faltam colunas na base. \n\n**Esperadas:** {', '.join(colunas_necessarias)}")
                 st.stop()
 
+            # --- VERIFICAÇÃO INTELIGENTE DO TIPO DE ITEM ---
+            if 'TIPO_ITEM' not in df_lido.columns:
+                st.warning(
+                    "A coluna 'TIPO_ITEM' não foi encontrada na planilha. O sistema assumirá que tudo é 'Material'.")
+                df_lido['TIPO_ITEM'] = 'MATERIAIS'
+
             if st.button("🚀 Processar Base de Dados", type="primary", use_container_width=True):
                 st.session_state['df_custos'] = df_lido
 
@@ -438,7 +448,7 @@ if 'df_custos' in st.session_state and st.session_state['df_custos'] is not None
     max_date = datas_disponiveis.max() if not datas_disponiveis.empty else datetime.today().date()
 
     # --- FILTROS AVANÇADOS NA UI ---
-    col_data, col_cc = st.columns([1, 1])
+    col_data, col_cc, col_tipo = st.columns([1, 1, 1])
     with col_data:
         datas_selecionadas = st.date_input(
             "📅 Período de Análise:",
@@ -447,8 +457,15 @@ if 'df_custos' in st.session_state and st.session_state['df_custos'] is not None
         )
     with col_cc:
         centros_disponiveis = sorted(df_base['CENTRO_CUSTO'].dropna().unique().tolist())
-        cc_selecionados = st.multiselect("Filtro por Centro de Custo (Opcional):", options=centros_disponiveis,
+        cc_selecionados = st.multiselect("Filtro de Centro de Custo:", options=centros_disponiveis,
                                          default=[], help="Deixe em branco para incluir todos.")
+    with col_tipo:
+        # NOVO: Filtro para separar Materiais de Serviços
+        tipo_filtro = st.selectbox(
+            "Tipo de Despesa:",
+            options=["🛠️ Materiais (Peças, Combustível)", "👷‍♂️ Serviços de Terceiros", "📊 Visão Consolidada (Ambos)"],
+            index=0
+        )
 
     if isinstance(datas_selecionadas, tuple) and len(datas_selecionadas) == 2:
         data_inicio, data_fim = datas_selecionadas
@@ -458,14 +475,31 @@ if 'df_custos' in st.session_state and st.session_state['df_custos'] is not None
 
     str_periodo = f"{data_inicio.strftime('%d/%m/%Y')} a {data_fim.strftime('%d/%m/%Y')}"
 
-    # Aplica filtro de Centro de Custo ANTES de gerar relatórios
-    if cc_selecionados:
-        df_filtrado_cc = df_base[df_base['CENTRO_CUSTO'].isin(cc_selecionados)].copy()
-    else:
-        df_filtrado_cc = df_base.copy()
+    # --- APLICAÇÃO DE FILTROS (CENTRO DE CUSTO E TIPO DE DESPESA) ---
+    df_filtrado = df_base.copy()
 
-    with st.spinner("Compilando relatórios e formatando a interface..."):
-        excel_bytes, pdf_bytes, df_clean = processar_e_gerar_relatorios(df_filtrado_cc, data_inicio, data_fim)
+    if cc_selecionados:
+        df_filtrado = df_filtrado[df_filtrado['CENTRO_CUSTO'].isin(cc_selecionados)]
+
+    # Tratamento da coluna TIPO_ITEM e alteração de textos
+    df_filtrado['TIPO_ITEM_CLEAN'] = df_filtrado['TIPO_ITEM'].astype(str).str.strip().str.upper()
+
+    if "Materiais" in tipo_filtro:
+        df_filtrado = df_filtrado[df_filtrado['TIPO_ITEM_CLEAN'] != 'TERCEIROS']
+        nome_relatorio = "Relatorio Consumo de Materiais, Cedro"
+        label_item = "Material"
+    elif "Serviços" in tipo_filtro:
+        df_filtrado = df_filtrado[df_filtrado['TIPO_ITEM_CLEAN'] == 'TERCEIROS']
+        nome_relatorio = "Relatorio Servicos de Terceiros, Cedro"
+        label_item = "Servico Prestado"
+    else:
+        # Visão Consolidada, não filtra por TIPO_ITEM
+        nome_relatorio = "Relatorio Consolidado de Custos, Cedro"
+        label_item = "Item / Servico"
+
+    with st.spinner(f"Compilando {nome_relatorio.lower()}..."):
+        excel_bytes, pdf_bytes, df_clean = processar_e_gerar_relatorios(df_filtrado, data_inicio, data_fim,
+                                                                        nome_relatorio, label_item)
 
     mask_ui = (df_clean['DATA_UTILIZACAO'].dt.date >= data_inicio) & (df_clean['DATA_UTILIZACAO'].dt.date <= data_fim)
     df_periodo_ui = df_clean[mask_ui]
@@ -492,7 +526,7 @@ if 'df_custos' in st.session_state and st.session_state['df_custos'] is not None
         🔹 **Principal Centro de Custo:** {maior_cc}  
         *(Representa {percentual_maior:.1f}% do total, acumulando {formatar_moeda(maior_valor)})*
 
-        🔹 **Material de Maior Impacto:** {maior_mat}  
+        🔹 **{label_item.replace('Servico', 'Serviço')} de Maior Impacto:** {maior_mat}  
         *(Responsável por {formatar_moeda(maior_mat_valor)} em gastos operacionais)*
         """)
     else:
@@ -537,7 +571,7 @@ if 'df_custos' in st.session_state and st.session_state['df_custos'] is not None
             st.plotly_chart(fig_pizza, use_container_width=True)
 
     with tab_abc:
-        st.markdown("##### Análise de Pareto (Materiais Classe A)")
+        st.markdown(f"##### Análise de Pareto ({label_item.replace('Servico', 'Serviço')} Classe A)")
         st.caption("Identifique rapidamente os 20% de itens que representam 80% do seu custo.")
         if not df_periodo_ui.empty:
             df_pareto = df_periodo_ui.groupby('MATERIAL')['VALOR_TOTAL'].sum().reset_index().sort_values('VALOR_TOTAL',
@@ -571,7 +605,7 @@ if 'df_custos' in st.session_state and st.session_state['df_custos'] is not None
             st.info("Nenhum dado para Análise de Pareto.")
 
     with tab_detalhes:
-        st.markdown(f"##### 📋 Top materiais consumidos no período")
+        st.markdown(f"##### 📋 Top itens consumidos no período")
         if not df_periodo_ui.empty:
             df_display = df_periodo_ui.groupby(['DATA_UTILIZACAO', 'CENTRO_CUSTO', 'MATERIAL'])[
                 ['QTD', 'VALOR_TOTAL']].sum().reset_index()
@@ -584,7 +618,8 @@ if 'df_custos' in st.session_state and st.session_state['df_custos'] is not None
                 column_config={
                     "DATA_UTILIZACAO": st.column_config.DateColumn("Data", format="DD/MM/YYYY"),
                     "CENTRO_CUSTO": st.column_config.TextColumn("Centro de Custo"),
-                    "MATERIAL": st.column_config.TextColumn("Material Utilizado", width="large"),
+                    "MATERIAL": st.column_config.TextColumn(f"{label_item.replace('Servico', 'Serviço')}",
+                                                            width="large"),
                     "QTD": st.column_config.NumberColumn("Quantidade"),
                     "VALOR_TOTAL": st.column_config.NumberColumn("Valor Total (R$)", format="R$ %.2f")
                 }
@@ -597,7 +632,9 @@ if 'df_custos' in st.session_state and st.session_state['df_custos'] is not None
     st.markdown("### 🖨️ Documentos para Impressão")
     st.caption("Relatório otimizado em PDF e detalhamento bruto em Excel considerando os filtros aplicados.")
 
-    nome_padrao_arquivo = f"Custos_{data_inicio.strftime('%d%m%y')}_a_{data_fim.strftime('%d%m%y')}"
+    tipo_arquivo = "Servicos" if "Serviços" in tipo_filtro else (
+        "Materiais" if "Materiais" in tipo_filtro else "Consolidado")
+    nome_padrao_arquivo = f"{tipo_arquivo}_{data_inicio.strftime('%d%m%y')}_a_{data_fim.strftime('%d%m%y')}"
 
     c_pdf, c_excel = st.columns(2)
     with c_pdf:
