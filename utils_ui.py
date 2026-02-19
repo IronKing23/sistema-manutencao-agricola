@@ -1,5 +1,6 @@
 import streamlit as st
 
+
 def load_custom_css():
     """Carrega o CSS global com suporte nativo a LIGHT e DARK mode."""
     st.markdown("""
@@ -40,7 +41,7 @@ def load_custom_css():
                 --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
             }
         }
-        
+
         /* Força variáveis se o Streamlit injetar classe dark manualmente */
         [data-theme="dark"] {
             --bg-color: #0E1117;
@@ -61,16 +62,16 @@ def load_custom_css():
             background-color: var(--bg-color);
             color: var(--text-color);
         }
-        
+
         .stApp {
             background-color: var(--bg-color);
         }
-        
+
         /* Força cor de texto em elementos markdown */
         p, .stMarkdown, .stText {
             color: var(--text-color) !important;
         }
-        
+
         .stCaption {
             color: var(--text-secondary) !important;
         }
@@ -86,7 +87,7 @@ def load_custom_css():
         [data-testid="stSidebar"] p, [data-testid="stSidebar"] span {
             color: var(--sidebar-text);
         }
-        
+
         /* Links de Navegação */
         div[data-testid="stSidebarNav"] a, div[data-testid="stSidebarNav"] span {
             color: var(--sidebar-text) !important;
@@ -115,23 +116,34 @@ def load_custom_css():
             box-shadow: var(--shadow-md);
             border-color: var(--primary-color);
         }
-        
-        .card-title {
-            color: var(--text-secondary);
+
+        .card-label {
             font-size: 0.85rem;
             font-weight: 600;
             text-transform: uppercase;
-            letter-spacing: 0.05em;
+            letter-spacing: 0.5px;
+            color: var(--text-secondary);
             margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
         }
-        
+
         .card-value {
-            color: var(--text-color);
-            font-size: 2rem;
+            font-size: 2.2rem;
             font-weight: 800;
-            line-height: 1.2;
+            color: var(--text-color);
+            line-height: 1;
         }
-        
+
+        .card-subtext {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            margin-top: 8px;
+            opacity: 0.8;
+        }
+
+        /* Ícones SVG nos cards */
         .card-icon svg {
             width: 32px;
             height: 32px;
@@ -148,7 +160,7 @@ def load_custom_css():
             padding: 0.5rem 1rem;
             box-shadow: var(--shadow-sm);
         }
-        
+
         /* Botão Primário */
         .stButton button[kind="primary"], .stDownloadButton button[kind="primary"] {
             background-color: var(--primary-color);
@@ -159,8 +171,8 @@ def load_custom_css():
             transform: scale(1.01);
             box-shadow: var(--shadow-md);
         }
-        
-        /* Botão Secundário (CORRIGIDO PARA DOWNLOAD) */
+
+        /* Botão Secundário */
         .stButton button[kind="secondary"], .stDownloadButton button[kind="secondary"] {
             background-color: var(--card-bg);
             color: var(--text-color);
@@ -169,7 +181,7 @@ def load_custom_css():
         .stButton button[kind="secondary"]:hover, .stDownloadButton button[kind="secondary"]:hover {
             background-color: var(--hover-bg);
             border-color: var(--text-secondary);
-            color: var(--text-color); /* Garante visibilidade no hover */
+            color: var(--text-color);
         }
 
         /* --- INPUTS & SELECTBOXES --- */
@@ -185,23 +197,22 @@ def load_custom_css():
         li[role="option"] {
             color: var(--text-color) !important;
         }
-        
+
         .stTextInput label, .stSelectbox label, .stNumberInput label, .stTextArea label, .stDateInput label {
             color: var(--text-secondary) !important;
             font-weight: 500;
         }
 
-        /* --- TABELAS (Dataframe & Data Editor) --- */
-        /* Alvo stDataFrame e stDataEditor (tabela editável) */
-        [data-testid="stDataFrame"], [data-testid="stDataEditor"] {
+        /* --- TABELAS --- */
+        [data-testid="stDataFrame"] {
             background-color: var(--card-bg);
             border: 1px solid var(--border-color);
             border-radius: 10px;
         }
-        [data-testid="stDataFrame"] div[role="grid"], [data-testid="stDataEditor"] div[role="grid"] {
+        [data-testid="stDataFrame"] div[role="grid"] {
             color: var(--text-color);
         }
-        [data-testid="stDataFrame"] thead th, [data-testid="stDataEditor"] thead th {
+        [data-testid="stDataFrame"] thead th {
             background-color: var(--hover-bg) !important;
             color: var(--text-secondary) !important;
             font-weight: 600;
@@ -228,35 +239,100 @@ def load_custom_css():
             border-top: none;
         }
 
-        /* --- HEADERS --- */
-        h1, h2, h3, h4, h5, h6 {
-            color: var(--text-color) !important;
+        /* --- CABEÇALHO PADRÃO --- */
+        .ui-header-container {
+            margin-bottom: 2rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .ui-header-title {
+            font-family: 'Inter', sans-serif;
+            font-size: 2rem;
             font-weight: 700;
+            color: var(--text-color);
+            margin: 0;
+            display: flex;
+            align-items: center;
+            gap: 12px;
         }
-        .stMarkdown hr {
-            border-top: 1px solid var(--border-color);
+        .ui-header-subtitle {
+            font-size: 0.95rem;
+            color: var(--text-secondary);
+            margin-top: 4px;
+            font-weight: 400;
         }
+
+        /* --- EMPTY STATE --- */
+        .ui-empty-state {
+            text-align: center;
+            padding: 40px 20px;
+            background-color: var(--card-bg);
+            border: 1px dashed var(--border-color);
+            border-radius: 12px;
+            color: var(--text-secondary);
+            margin-top: 20px;
+        }
+
     </style>
     """, unsafe_allow_html=True)
 
 
-def card_kpi(col, titulo, valor, icone="📊", cor_borda="transparent", subtexto=""):
-    """Renderiza um card de KPI moderno. Suporta Emoji ou SVG."""
-    if cor_borda in ["#ddd", "#E0E0E0", "transparent", "white"]:
-        cor_borda = "#64748B" 
+# --- COMPONENTES VISUAIS (Python Wrappers) ---
 
-    icon_html = icone
-    if not str(icone).strip().startswith("<svg"):
-        icon_html = f'<span style="font-size: 1.8rem;">{icone}</span>'
-        
+def ui_header(title, subtitle="", icon=""):
+    """Renderiza um cabeçalho de página padronizado."""
+    icon_html = ""
+    if icon:
+        if str(icon).strip().startswith("<svg"):
+            clean_svg = str(icon).replace("\n", "").replace("\r", "").strip()
+            icon_html = f"<div style='width: 32px; height: 32px; display: flex; align-items: center;'>{clean_svg}</div>"
+        else:
+            icon_html = f"<span>{icon}</span>"
+
+    st.markdown(f"""
+    <div class="ui-header-container">
+        <div class="ui-header-title">{icon_html} {title}</div>
+        <div class="ui-header-subtitle">{subtitle}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def ui_kpi_card(col, title, value, icon_svg="", color="#64748B", subtext=""):
+    """Renderiza um card de KPI padronizado (Versão Atualizada)."""
+    if color in ["#ddd", "#E0E0E0", "transparent", "white"]:
+        color = "#64748B"
+
+    icon_render = ""
+    if icon_svg:
+        svg = str(icon_svg).replace('\n', '').strip()
+        if svg.startswith("<svg"):
+            icon_render = svg
+        else:
+            icon_render = f"<span style='font-size: 1.5rem;'>{icon_svg}</span>"
+
     html = f"""
-    <div class="ui-card" style="border-left: 4px solid {cor_borda};">
-        <div>
-            <div class="card-icon">{icon_html}</div>
-            <div class="card-title">{titulo}</div>
-            <div class="card-value">{valor}</div>
-            <div style="font-size: 0.85em; color: var(--text-secondary); margin-top: 5px;">{subtexto}</div>
+    <div class="ui-card" style="border-left: 4px solid {color};">
+        <div class="card-label" style="color: {color};">
+            <div style="width: 24px; height: 24px; display: flex; align-items: center; justify-content: center;">{icon_render}</div>
+            {title}
         </div>
+        <div class="card-value">{value}</div>
+        <div class="card-subtext">{subtext}</div>
     </div>
     """
     col.markdown(html, unsafe_allow_html=True)
+
+
+def ui_empty_state(message="Nenhum dado encontrado.", icon="🔍"):
+    """Renderiza um visual para quando não há dados."""
+    st.markdown(f"""
+    <div class="ui-empty-state">
+        <div style="font-size: 2rem; margin-bottom: 10px;">{icon}</div>
+        <p>{message}</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def card_kpi(col, titulo, valor, icone="📊", cor_borda="transparent", subtexto=""):
+    """Alias para compatibilidade com código antigo."""
+    ui_kpi_card(col, titulo, valor, icone, cor_borda, subtexto)

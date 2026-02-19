@@ -11,6 +11,8 @@ import autenticacao
 from utils_ui import load_custom_css
 from utils_icons import get_icon
 
+# from database_schema import inicializar_banco # Descomente se tiver o arquivo
+
 # --- 3. CONFIGURAÇÃO DA PÁGINA (Primeiro comando obrigatório) ---
 st.set_page_config(
     layout="wide",
@@ -20,33 +22,34 @@ st.set_page_config(
 )
 
 # --- 4. CARREGAMENTO DE ESTILOS E CORREÇÕES VISUAIS ---
+# inicializar_banco() # Descomente se tiver o arquivo
 load_custom_css()
 
-# CSS Extra para corrigir o cabeçalho e espaçamentos
+# CSS Extra para corrigir o cabeçalho branco e ajustes finos
 st.markdown("""
-<style>
-/* Torna o cabeçalho padrão do Streamlit transparente */
-header[data-testid="stHeader"] {
-    background-color: transparent !important;
-    z-index: 1;
-}
+    <style>
+        /* Torna o cabeçalho padrão do Streamlit transparente */
+        header[data-testid="stHeader"] {
+            background-color: transparent !important;
+            z-index: 1;
+        }
 
-/* Ajusta o espaçamento do topo */
-.block-container {
-    padding-top: 3.5rem !important; 
-}
+        /* Ajusta o espaçamento do topo para não sobrepor o cabeçalho */
+        .block-container {
+            padding-top: 3.5rem !important; 
+        }
 
-/* Remove padding excessivo do topo da sidebar */
-[data-testid="stSidebarUserContent"] {
-    padding-top: 1.5rem !important;
-}
+        /* Garante que o menu hambúrguer (três pontinhos) seja visível */
+        button[kind="header"] {
+            background-color: transparent !important;
+            color: var(--text-color) !important;
+        }
 
-/* Garante que o menu hambúrguer seja visível */
-button[kind="header"] {
-    background-color: transparent !important;
-    color: var(--text-color) !important;
-}
-</style>
+        /* Remove padding excessivo do topo da sidebar */
+        [data-testid="stSidebarUserContent"] {
+            padding-top: 1.5rem !important;
+        }
+    </style>
 """, unsafe_allow_html=True)
 
 # --- 5. VERIFICAÇÃO DE SEGURANÇA ---
@@ -64,27 +67,28 @@ def criar_pagina(arquivo, titulo, icone, default=False):
 
 # Lista de páginas do sistema
 paginas_config = [
-    # Dashboards
+    # Dashboards (Agora com 7 páginas)
     ("pages/0_Inicio.py", "Início", "🏠", True),
     ("pages/1_Painel_Principal.py", "Visão Geral", "📊", False),
     ("pages/15_Indicadores_KPI.py", "Indicadores (MTBF)", "📈", False),
+    ("pages/17_Eficiencia_Apontamentos.py", "Eficiência (PIMS/RH)", "⏱️", False),
     ("pages/7_Historico_Maquina.py", "Prontuário Máquina", "🚜", False),
     ("pages/10_Mapa_Atendimentos.py", "Mapa Geográfico", "🗺️", False),
+    ("pages/18_relatorio_gastos.py", "Relatório de Custos", "💰", False),  # <--- VINCULAMOS AQUI
 
-    # Operacional
+    # Operacional (4 páginas)
     ("pages/5_Nova_Ordem_Servico.py", "Nova O.S.", "📝", False),
-    ("pages/16_Controle_Preventivas.py", "Controle Preventivas", "🛡️", False),  # <--- ADICIONE ESTA LINHA AQUI
     ("pages/6_Gerenciar_Atendimento.py", "Gerenciar O.S.", "🔄", False),
     ("pages/11_Quadro_Avisos.py", "Mural de Avisos", "📌", False),
     ("pages/13_Comunicacao.py", "Central WhatsApp", "📱", False),
 
-    # Cadastros
+    # Cadastros (4 páginas)
     ("pages/2_Cadastro_Equipamentos.py", "Equipamentos", "🚛", False),
     ("pages/3_Cadastro_Funcionarios.py", "Funcionários", "👷", False),
     ("pages/4_Cadastro_Operacoes.py", "Tipos de Operação", "⚙️", False),
     ("pages/14_Cadastro_Areas.py", "Áreas / Talhões", "📍", False),
 
-    # Admin
+    # Admin (3 páginas)
     ("pages/9_Gestao_Usuarios.py", "Usuários", "🔐", False),
     ("pages/12_Auditoria.py", "Auditoria", "🕵️", False),
     ("pages/8_Backup_Seguranca.py", "Backup", "💾", False),
@@ -99,28 +103,23 @@ if not lista_paginas_validas:
     st.error("Erro crítico: Nenhuma página encontrada. Verifique a pasta 'pages'.")
     st.stop()
 
-# Configura a navegação
+# Configura a navegação (Ajustei os índices de fatiamento para a nova contagem de páginas)
 pg = st.navigation({
-    "Dashboards": lista_paginas_validas[:5],
-    "Operacional": lista_paginas_validas[5:9],
-    "Cadastros": lista_paginas_validas[9:13],
-    "Sistema": lista_paginas_validas[13:]
+    "Dashboards": lista_paginas_validas[:7],  # Do índice 0 ao 6
+    "Operacional": lista_paginas_validas[7:11],  # Do índice 7 ao 10
+    "Cadastros": lista_paginas_validas[11:15],  # Do índice 11 ao 14
+    "Sistema": lista_paginas_validas[15:]  # Do índice 15 em diante
 })
 
 # --- 7. BARRA LATERAL (SIDEBAR) ESTILIZADA ---
 with st.sidebar:
     # --- CABEÇALHO DINÂMICO ---
     try:
-        # Usa variável CSS para cor, adaptando-se a temas claros/escuros
-        # .strip() é crucial para remover espaços que o Markdown pode interpretar como código
-        logo_svg = get_icon("tractor", color="var(--primary-color)", size="54").strip()
+        logo_svg = get_icon("tractor", color="var(--primary-color)", size="54")
     except:
         logo_svg = "🚜"
 
-    # O uso de textwrap.dedent ou garantir que a string comece na margem esquerda é vital
-    # Aqui, construímos a string sem indentação
-    sidebar_html = f"""
-<div style="text-align: center; padding: 0 0 20px 0; border-bottom: 1px solid var(--border-color); margin-bottom: 20px;">
+    st.markdown(f"""<div style="text-align: center; padding: 0 0 20px 0; border-bottom: 1px solid var(--border-color); margin-bottom: 20px;">
 <div style="margin-bottom: 12px; display: inline-block; filter: drop-shadow(0 4px 6px rgba(0,0,0,0.1)); transition: transform 0.3s ease;" onmouseover="this.style.transform='scale(1.1) rotate(-5deg)'" onmouseout="this.style.transform='scale(1) rotate(0deg)'">
 {logo_svg}
 </div>
@@ -130,9 +129,7 @@ Controle<br>Agrícola
 <p style="color: var(--text-secondary); font-size: 10px; margin: 8px 0 0 0; text-transform: uppercase; letter-spacing: 2px; font-weight: 600; opacity: 0.8;">
 Gestão de Frotas v2.0
 </p>
-</div>
-"""
-    st.markdown(sidebar_html, unsafe_allow_html=True)
+</div>""", unsafe_allow_html=True)
 
     # Botão Sair
     if st.button("Sair do Sistema", use_container_width=True):
@@ -149,8 +146,7 @@ Gestão de Frotas v2.0
         nome = st.session_state['user_nome']
         iniciais = "".join([n[0] for n in nome.split()[:2]]).upper()
 
-        profile_html = f"""
-<div style='margin-top: 30px; border-top: 1px solid var(--border-color); padding-top: 20px; display: flex; align-items: center; gap: 15px;'>
+        st.markdown(f"""<div style='margin-top: 30px; border-top: 1px solid var(--border-color); padding-top: 20px; display: flex; align-items: center; gap: 15px;'>
 <div style='width: 42px; height: 42px; border-radius: 50%; background-color: var(--hover-bg); color: var(--text-color); display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 16px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); border: 1px solid var(--border-color);'>
 {iniciais}
 </div>
@@ -158,9 +154,7 @@ Gestão de Frotas v2.0
 <span style='color: var(--text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: 1px; font-weight: 500;'>Usuário</span><br>
 <span style='color: var(--text-color); font-size: 14px; font-weight: 600;'>{nome}</span>
 </div>
-</div>
-"""
-        st.markdown(profile_html, unsafe_allow_html=True)
+</div>""", unsafe_allow_html=True)
 
 # --- 8. EXECUÇÃO ---
 pg.run()

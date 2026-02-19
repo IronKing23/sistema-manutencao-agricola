@@ -8,3 +8,7 @@ extra-streamlit-components
 bcrypt
 openpyxl
 pytz
+fpdf
+matplotlib
+xlrd>=2.0.1
+pytz
