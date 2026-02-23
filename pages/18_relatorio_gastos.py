@@ -9,6 +9,7 @@ import io
 import tempfile
 import sys
 from datetime import datetime
+import numpy as np
 
 # Tentativa segura de importar o matplotlib
 try:
@@ -96,6 +97,7 @@ class RelatorioPDF(FPDF):
 
 @st.cache_data(show_spinner="Processando arquivos e gerando relatórios PDF/Excel...", ttl=600)
 def processar_e_gerar_relatorios(df, data_inicio, data_fim, nome_relatorio, label_item):
+    df = df.copy()  # Evita alertas do pandas
     df['DATA_UTILIZACAO'] = pd.to_datetime(df['DATA_UTILIZACAO'], dayfirst=True, errors='coerce')
     df = df.dropna(subset=['DATA_UTILIZACAO', 'CENTRO_CUSTO'])
 
@@ -111,6 +113,75 @@ def processar_e_gerar_relatorios(df, data_inicio, data_fim, nome_relatorio, labe
         df['REQUISITANTE'] = ''
     else:
         df['REQUISITANTE'] = df['REQUISITANTE'].fillna('').astype(str)
+
+    # --- NOVO: CONCATENAÇÃO INTELIGENTE (Cria Quebra de Linha Verdadeira) ---
+    def integrar_descricao(row):
+        mat = str(row['MATERIAL']).strip()
+        req = str(row['REQUISITANTE']).strip()
+        if req and req.lower() != 'nan' and req != '-':
+            return f"{mat}\nDetalhamento: {req}"
+        return mat
+
+    df['MATERIAL'] = df.apply(integrar_descricao, axis=1)
+
+    # --- NOVA FUNÇÃO PARA TEXTOS LONGOS COM MULTILINE ---
+    def desenhar_linha_multicell(pdf_obj, textos, larguras, alinhamentos, fill_row):
+        pdf_obj.set_font('Arial', '', 8)
+
+        texto_material = str(textos[0]).encode('latin-1', 'replace').decode('latin-1')
+
+        # Calcula largura do texto para estimar quantas quebras de linha ele terá
+        largura_util = larguras[0] - 2
+        largura_texto = pdf_obj.get_string_width(texto_material)
+        linhas_estimadas = max(1, int((largura_texto / largura_util) + 0.9))
+
+        # Define a altura da célula para comportar o texto
+        altura_linha = 4
+        altura_total = max(6, (linhas_estimadas * altura_linha) + 2)
+
+        # Checa quebra de página automática do FPDF (280mm é o limite da folha A4 retrato)
+        if pdf_obj.get_y() + altura_total > 280:
+            pdf_obj.add_page()
+
+        x_inicial = pdf_obj.get_x()
+        y_inicial = pdf_obj.get_y()
+
+        # Desenha o fundo (Zebra)
+        if fill_row:
+            pdf_obj.set_fill_color(245, 247, 250)
+        else:
+            pdf_obj.set_fill_color(255, 255, 255)
+
+        pdf_obj.rect(x_inicial, y_inicial, sum(larguras), altura_total, 'F')
+
+        # Desenha a borda inferior
+        pdf_obj.set_draw_color(220, 220, 220)
+        pdf_obj.line(x_inicial, y_inicial + altura_total, x_inicial + sum(larguras), y_inicial + altura_total)
+
+        # Imprime a 1a coluna (Material) aplicando a quebra de texto
+        pdf_obj.set_xy(x_inicial, y_inicial + 1)
+        pdf_obj.multi_cell(larguras[0], altura_linha, f" {texto_material}", 0, alinhamentos[0])
+
+        # Capta a posição Y real após a escrita (caso a estimativa erre alguma linha)
+        y_final_real = max(y_inicial + altura_total, pdf_obj.get_y() + 1)
+        altura_final = y_final_real - y_inicial
+
+        # Imprime as demais colunas alinhadas
+        pdf_obj.set_text_color(40, 40, 40)
+        for i in range(1, len(textos)):
+            x_atual = x_inicial + sum(larguras[:i])
+            pdf_obj.set_xy(x_atual, y_inicial)
+
+            texto_celula = str(textos[i]).encode('latin-1', 'replace').decode('latin-1')
+            if alinhamentos[i] == 'R':
+                texto_celula = f"{texto_celula} "
+            elif alinhamentos[i] == 'L':
+                texto_celula = f" {texto_celula}"
+
+            pdf_obj.cell(larguras[i], altura_final, texto_celula, 0, 0, alinhamentos[i])
+
+        # Posiciona cursor na próxima linha corretamente
+        pdf_obj.set_xy(x_inicial, y_final_real)
 
     excel_io = io.BytesIO()
 
@@ -203,7 +274,11 @@ def processar_e_gerar_relatorios(df, data_inicio, data_fim, nome_relatorio, labe
         pdf.set_xy(140, y_kpi + 10)
         pdf.set_font('Arial', 'B', 9)
         pdf.set_text_color(15, 23, 42)
-        mat_txt = str(maior_mat_resumo)[:22].encode('latin-1', 'replace').decode('latin-1')
+
+        # Evita quebra de layout no Card 3 truncando a string (pois contém \n agora)
+        m_str = str(maior_mat_resumo).replace('\n', ' - ')
+        mat_txt = (m_str[:26] + '..') if len(m_str) > 28 else m_str
+        mat_txt = mat_txt.encode('latin-1', 'replace').decode('latin-1')
         pdf.cell(58, 7, mat_txt, 0, 1, 'C')
 
         pdf.set_xy(10, y_kpi + 28)  # Retorna o cursor para debaixo dos cards
@@ -232,45 +307,18 @@ def processar_e_gerar_relatorios(df, data_inicio, data_fim, nome_relatorio, labe
         pdf.set_font('Arial', 'B', 11)
         pdf.cell(0, 6, f"3. {label_item} de Maior Impacto:", 0, 1)
         pdf.set_font('Arial', '', 10)
-        pdf.cell(0, 6, f"   O item/servico mais custoso foi '{str(maior_mat_resumo)[:55]}...',", 0, 1)
+
+        # Garante que descrições longas não destruam a frase do resumo
+        m_str = str(maior_mat_resumo).replace('\n', ' - ')
+        txt_mat = (m_str[:80] + '...') if len(m_str) > 80 else m_str
+        txt_mat = txt_mat.encode('latin-1', 'replace').decode('latin-1')
+        pdf.cell(0, 6, f"   O item/servico mais custoso foi '{txt_mat}',", 0, 1)
         pdf.cell(0, 6, f"   totalizando {formatar_moeda(maior_mat_valor_resumo)} em gastos.", 0, 1)
         pdf.ln(6)
 
         # ==============================================================================
-        # TABELAS ZEBRA PREMIUM
+        # TABELAS ZEBRA PREMIUM (ORDEM INVERTIDA)
         # ==============================================================================
-
-        # --- SEÇÃO: RESUMO POR CENTRO DE CUSTO ---
-        pdf.set_font('Arial', 'B', 12)
-        pdf.set_text_color(22, 102, 53)
-        pdf.cell(0, 8, "Resumo por Centro de Custo", 0, 1)
-
-        # Cabeçalho da Tabela
-        pdf.set_font('Arial', 'B', 9)
-        pdf.set_text_color(255, 255, 255)  # Texto Branco
-        pdf.set_fill_color(22, 102, 53)  # Fundo Verde Cedro
-        pdf.set_draw_color(255, 255, 255)
-        pdf.cell(140, 7, " Centro de Custo", 1, 0, 'L', fill=True)
-        pdf.cell(50, 7, " Valor Total", 1, 1, 'R', fill=True)
-
-        # Linhas (Zebra)
-        pdf.set_font('Arial', '', 8)
-        pdf.set_text_color(40, 40, 40)
-        pdf.set_draw_color(220, 220, 220)
-
-        fill = False
-        for _, row in cc_agrupado_resumo.iterrows():
-            if fill:
-                pdf.set_fill_color(245, 247, 250)  # Fundo Zebra
-            else:
-                pdf.set_fill_color(255, 255, 255)
-
-            cc_str = str(row['CENTRO_CUSTO'])[:80].encode('latin-1', 'replace').decode('latin-1')
-            pdf.cell(140, 6, f" {cc_str}", 'B', 0, 'L', fill=True)
-            pdf.cell(50, 6, f"{formatar_moeda(row['VALOR_TOTAL'])} ", 'B', 1, 'R', fill=True)
-            fill = not fill
-
-        pdf.ln(8)
 
         # --- SEÇÃO: TOP 20 GERAL NA CAPA ---
         pdf.set_font('Arial', 'B', 12)
@@ -297,17 +345,36 @@ def processar_e_gerar_relatorios(df, data_inicio, data_fim, nome_relatorio, labe
 
         fill = False
         for _, row in top_20_global.iterrows():
-            if fill:
-                pdf.set_fill_color(245, 247, 250)
-            else:
-                pdf.set_fill_color(255, 255, 255)
+            mat_str = str(row['MATERIAL'])
+            cc_str = str(row['CENTRO_CUSTO'])[:25]
+            val_str = formatar_moeda(row['VALOR_TOTAL'])
 
-            mat_str = str(row['MATERIAL'])[:65].encode('latin-1', 'replace').decode('latin-1')
-            cc_str = str(row['CENTRO_CUSTO'])[:18].encode('latin-1', 'replace').decode('latin-1')
+            desenhar_linha_multicell(pdf, [mat_str, cc_str, val_str], [115, 35, 40], ['L', 'C', 'R'], fill)
+            fill = not fill
 
-            pdf.cell(115, 6, f" {mat_str}", 'B', 0, 'L', fill=True)
-            pdf.cell(35, 6, cc_str, 'B', 0, 'C', fill=True)
-            pdf.cell(40, 6, f"{formatar_moeda(row['VALOR_TOTAL'])} ", 'B', 1, 'R', fill=True)
+        pdf.ln(8)
+
+        # --- SEÇÃO: RESUMO POR CENTRO DE CUSTO ---
+        pdf.set_font('Arial', 'B', 12)
+        pdf.set_text_color(22, 102, 53)
+        pdf.cell(0, 8, "Resumo por Centro de Custo", 0, 1)
+
+        # Cabeçalho da Tabela
+        pdf.set_font('Arial', 'B', 9)
+        pdf.set_text_color(255, 255, 255)  # Texto Branco
+        pdf.set_fill_color(22, 102, 53)  # Fundo Verde Cedro
+        pdf.set_draw_color(255, 255, 255)
+        pdf.cell(140, 7, " Centro de Custo", 1, 0, 'L', fill=True)
+        pdf.cell(50, 7, " Valor Total", 1, 1, 'R', fill=True)
+
+        # Linhas (Zebra) com a função corrigida
+        fill = False
+        for _, row in cc_agrupado_resumo.iterrows():
+            cc_str = str(row['CENTRO_CUSTO'])
+            val_str = formatar_moeda(row['VALOR_TOTAL'])
+
+            # Aqui estava o erro! Substituído pelo desenhar_linha_multicell para evitar problemas
+            desenhar_linha_multicell(pdf, [cc_str, val_str], [140, 50], ['L', 'R'], fill)
             fill = not fill
 
         pdf.ln(10)
@@ -407,8 +474,8 @@ def processar_e_gerar_relatorios(df, data_inicio, data_fim, nome_relatorio, labe
             for dia in dias_unicos_periodo:
                 df_dia = df_periodo[df_periodo['DATA_UTILIZACAO'].dt.date == dia]
 
-                # --- LÓGICA DE AGRUPAMENTO ATUALIZADA (Material + Requisitante) ---
-                materiais_agrupados = df_dia.groupby(['MATERIAL', 'REQUISITANTE']).agg({
+                # Como a coluna MATERIAL já foi unificada no início do ETL, o agrupamento já herda tudo!
+                materiais_agrupados = df_dia.groupby('MATERIAL').agg({
                     'UN': 'first',
                     'QTD': 'sum',
                     'VALOR_TOTAL': 'sum'
@@ -437,7 +504,6 @@ def processar_e_gerar_relatorios(df, data_inicio, data_fim, nome_relatorio, labe
                 pdf.cell(15, 6, " UN", 1, 0, 'C', fill=True)
                 pdf.cell(25, 6, " QTD", 1, 0, 'C', fill=True)
                 pdf.cell(45, 6, " Valor Total", 1, 1, 'R', fill=True)
-
                 # Linhas
                 pdf.set_font('Arial', '', 8)
                 pdf.set_text_color(40, 40, 40)
@@ -445,30 +511,16 @@ def processar_e_gerar_relatorios(df, data_inicio, data_fim, nome_relatorio, labe
 
                 fill_row = False
                 for _, mat in top_20.iterrows():
-                    if fill_row:
-                        pdf.set_fill_color(248, 250, 252)
-                    else:
-                        pdf.set_fill_color(255, 255, 255)
+                    mat_str = str(mat['MATERIAL'])
+                    un_str = str(mat['UN'])[:5]
+                    qtd_str = str(mat['QTD'])
+                    val_str = formatar_moeda(mat['VALOR_TOTAL'])
 
-                    mat_base = str(mat['MATERIAL']).strip()
-                    req_val = str(mat['REQUISITANTE']).strip()
-
-                    # Concatena a descrição do serviço/requisitante se ela existir
-                    if req_val and req_val.lower() != 'nan' and req_val != '-':
-                        nome_completo = f"{mat_base} - {req_val}"
-                    else:
-                        nome_completo = mat_base
-
-                    nome_mat_pdf = nome_completo[:65].encode('latin-1', 'replace').decode('latin-1')
-                    un_str = str(mat['UN'])[:5].encode('latin-1', 'replace').decode('latin-1')
-
-                    pdf.cell(105, 6, f" {nome_mat_pdf}", 'B', 0, 'L', fill=True)
-                    pdf.cell(15, 6, un_str, 'B', 0, 'C', fill=True)
-                    pdf.cell(25, 6, str(mat['QTD']), 'B', 0, 'C', fill=True)
-                    pdf.cell(45, 6, f"{formatar_moeda(mat['VALOR_TOTAL'])} ", 'B', 1, 'R', fill=True)
+                    desenhar_linha_multicell(pdf, [mat_str, un_str, qtd_str, val_str], [105, 15, 25, 45],
+                                             ['L', 'C', 'C', 'R'], fill_row)
 
                     linhas_excel.append({
-                        f'{label_item}': nome_completo,
+                        f'{label_item}': mat_str,
                         'UN': mat['UN'],
                         'Quantidade': mat['QTD'],
                         'Valor Total': mat['VALOR_TOTAL']
@@ -560,20 +612,13 @@ def processar_e_gerar_relatorios(df, data_inicio, data_fim, nome_relatorio, labe
 
         fill_abc = False
         for _, row in df_pareto.head(20).iterrows():
-            if fill_abc:
-                pdf.set_fill_color(245, 247, 250)
-            else:
-                pdf.set_fill_color(255, 255, 255)
-
-            mat_str = str(row['MATERIAL'])[:60].encode('latin-1', 'replace').decode('latin-1')
+            mat_str = str(row['MATERIAL'])
             classe_str = f"Classe {str(row['Classe'])}"
             pct_str = f"{row['% Acumulado']:.1f}%"
             val_str = formatar_moeda(row['VALOR_TOTAL'])
 
-            pdf.cell(105, 6, f" {mat_str}", 'B', 0, 'L', fill=True)
-            pdf.cell(20, 6, classe_str, 'B', 0, 'C', fill=True)
-            pdf.cell(25, 6, pct_str, 'B', 0, 'C', fill=True)
-            pdf.cell(40, 6, f"{val_str} ", 'B', 1, 'R', fill=True)
+            desenhar_linha_multicell(pdf, [mat_str, classe_str, pct_str, val_str], [105, 20, 25, 40],
+                                     ['L', 'C', 'C', 'R'], fill_abc)
             fill_abc = not fill_abc
 
     bytes_excel = excel_io.getvalue()
@@ -828,30 +873,12 @@ if 'df_custos' in st.session_state and st.session_state['df_custos'] is not None
         st.markdown(f"##### 📋 Top itens consumidos no período")
         if not df_periodo_ui.empty:
 
-            # Garante coluna Requisitante caso não exista
-            if 'REQUISITANTE' not in df_periodo_ui.columns:
-                df_periodo_ui['REQUISITANTE'] = ''
-
-            # Agrupa os itens considerando agora também a descrição do requisitante
-            df_display = df_periodo_ui.groupby(['DATA_UTILIZACAO', 'CENTRO_CUSTO', 'MATERIAL', 'REQUISITANTE']).agg({
+            # Como a coluna MATERIAL foi concatenada na fonte de dados do ETL, o agrupamento já reconhece o serviço unificado!
+            df_display = df_periodo_ui.groupby(['DATA_UTILIZACAO', 'CENTRO_CUSTO', 'MATERIAL']).agg({
                 'UN': 'first',
                 'QTD': 'sum',
                 'VALOR_TOTAL': 'sum'
             }).reset_index()
-
-
-            # Função para concatenar Material e Requisitante apenas para a exibição na tela
-            def format_display_name(row):
-                m = str(row['MATERIAL']).strip()
-                r = str(row['REQUISITANTE']).strip()
-                if r and r.lower() != 'nan' and r != '-':
-                    return f"{m} - {r}"
-                return m
-
-
-            df_display['MATERIAL'] = df_display.apply(format_display_name, axis=1)
-            # Retira a coluna original de requisitante para não duplicar na exibição visual
-            df_display = df_display.drop(columns=['REQUISITANTE'])
 
             df_display = df_display.sort_values(by=['DATA_UTILIZACAO', 'CENTRO_CUSTO', 'VALOR_TOTAL'],
                                                 ascending=[False, True, False])
