@@ -355,7 +355,6 @@ def processar_e_gerar_relatorios_eficiencia(df_view, dt_in, dt_out):
             altura_figura = max(3.0, len(chunk_plot) * 0.3)
             fig3, ax3 = plt.subplots(figsize=(14, altura_figura))
 
-            # Cria rótulos mais bonitos pro gráfico
             labels = chunk_plot['NOME_FINAL'].str.slice(0, 20) + " (" + chunk_plot['SETOR'].str.slice(0, 12) + ")"
 
             ax3.barh(labels, chunk_plot['HORAS_PROD'], color='#22C55E', label='Produtivo', edgecolor='none')
@@ -380,7 +379,6 @@ def processar_e_gerar_relatorios_eficiencia(df_view, dt_in, dt_out):
             fig3.savefig(img_colab, dpi=150, bbox_inches='tight')
             plt.close(fig3)
 
-            # Se for o segundo gráfico do loop em diante, ou a página não tiver espaço, joga pra folha nova
             if idx > 0 or pdf.get_y() > 130:
                 pdf.add_page()
 
@@ -439,6 +437,100 @@ def processar_e_gerar_relatorios_eficiencia(df_view, dt_in, dt_out):
         pdf.cell(22, 6, f"{row['FALTA_REFEICAO']}d", 'B', 1, 'C', fill=True)
         fill = not fill
 
+    # ==============================================================================
+    # PÁGINA 4: MATRIZ DE CALENDÁRIO DIÁRIO (LÓGICA LARANJA)
+    # ==============================================================================
+    pdf.add_page()
+    pdf.set_font('Arial', 'B', 14)
+    pdf.set_text_color(22, 102, 53)
+    pdf.cell(0, 8, "Matriz de Apontamentos Diarios (Eficiencia %)", 0, 1)
+
+    pdf.set_font('Arial', '', 8)
+    pdf.set_text_color(80, 80, 80)
+    pdf.cell(0, 5,
+             "Legenda: Verde (>=85%)  |  Amarelo (70 a 84%)  |  Vermelho (<70%)  |  Laranja (Falta de Apontamento)  |  Cinza (Folga)",
+             0, 1)
+    pdf.ln(2)
+
+    # Identifica os dias do filtro selecionado
+    dias_unicos = sorted(df_view['DT_REF'].dropna().unique())
+    # Limita a 31 dias no máximo para não estourar a folha A4 lateralmente
+    max_dias = min(len(dias_unicos), 31)
+    dias_to_plot = dias_unicos[:max_dias]
+
+    # Geometria da Matriz
+    w_setor = 35
+    w_nome = 50
+    w_dia = (277 - w_nome - w_setor) / max_dias if max_dias > 0 else 10
+
+    def print_matrix_header():
+        pdf.set_font('Arial', 'B', 7)
+        pdf.set_fill_color(22, 102, 53)
+        pdf.set_text_color(255, 255, 255)
+        pdf.cell(w_setor, 6, " Setor", 1, 0, 'L', fill=True)
+        pdf.cell(w_nome, 6, " Colaborador", 1, 0, 'L', fill=True)
+        for d in dias_to_plot:
+            pdf.cell(w_dia, 6, d.strftime('%d'), 1, 0, 'C', fill=True)
+        pdf.ln()
+
+    if max_dias > 0:
+        print_matrix_header()
+
+        # PREPARAÇÃO DOS DADOS DA MATRIZ: Identificando Falta de Apontamento (-1)
+        df_view_pdf = df_view.copy()
+        df_view_pdf['MATRIZ_VAL'] = df_view_pdf['EFICIENCIA_VISUAL']
+        # Se tem jornada no RH mas não lançou nada no PIMS, recebe flag especial -1
+        mask_falta_pdf = (df_view_pdf['H_REAL_LIQ'] > 0.1) & (df_view_pdf['HORAS_DEC'] < 0.1)
+        df_view_pdf.loc[mask_falta_pdf, 'MATRIZ_VAL'] = -1
+
+        # Cria a matriz pivotada
+        pivot_matrix = df_view_pdf.pivot_table(index=['SETOR', 'NOME_FINAL'], columns='DT_REF', values='MATRIZ_VAL',
+                                               aggfunc='mean')
+        pivot_matrix = pivot_matrix.sort_index(level=[0, 1])
+
+        pdf.set_font('Arial', 'B', 6)
+
+        for idx, row in pivot_matrix.iterrows():
+            if pdf.get_y() > 185:
+                pdf.add_page()
+                print_matrix_header()
+
+            setor, nome = idx
+            setor_str = str(setor)[:18].encode('latin-1', 'replace').decode('latin-1')
+            nome_str = str(nome)[:25].encode('latin-1', 'replace').decode('latin-1')
+
+            pdf.set_text_color(40, 40, 40)
+            pdf.set_fill_color(245, 247, 250)
+            pdf.cell(w_setor, 5, f" {setor_str}", 1, 0, 'L', fill=True)
+            pdf.cell(w_nome, 5, f" {nome_str}", 1, 0, 'L', fill=True)
+
+            # Preenche os dias com as cores atualizadas
+            for d in dias_to_plot:
+                val = row.get(d, np.nan)
+
+                if pd.isna(val) or val == 0:
+                    pdf.set_fill_color(240, 240, 240)  # Cinza Claro (Folga / Sem base)
+                    txt = "-"
+                    pdf.set_text_color(180, 180, 180)
+                elif val == -1:
+                    pdf.set_fill_color(254, 215, 170)  # Laranja Claro (Falta Apontamento)
+                    txt = "0"
+                    pdf.set_text_color(154, 52, 18)  # Laranja Escuro
+                else:
+                    txt = f"{val:.0f}"
+                    if val >= 85:
+                        pdf.set_fill_color(187, 247, 208)  # Verde
+                        pdf.set_text_color(22, 101, 52)
+                    elif val >= 70:
+                        pdf.set_fill_color(254, 240, 138)  # Amarelo
+                        pdf.set_text_color(161, 98, 7)
+                    else:
+                        pdf.set_fill_color(254, 202, 202)  # Vermelho
+                        pdf.set_text_color(153, 27, 27)
+
+                pdf.cell(w_dia, 5, txt, 1, 0, 'C', fill=True)
+            pdf.ln()
+
     # --- GERAÇÃO DO EXCEL MULTI-ABA ---
     with pd.ExcelWriter(excel_io) as writer:
         colunas_excel = [
@@ -470,9 +562,34 @@ def processar_e_gerar_relatorios_eficiencia(df_view, dt_in, dt_out):
                            'Produtivo (h)', 'Improdutivo (h)', 'Eficiencia (%)', 'Dias sem Refeicao']
         df_rank_excel = df_rank_excel[cols_order_rank]
 
+        # Gera a Matriz Pivotada também no Excel!
+        df_matriz_excel = df_view.copy()
+        df_matriz_excel['MATRIZ_VAL'] = df_matriz_excel['EFICIENCIA_VISUAL']
+        # No Excel, ao invés da cor, ele coloca o texto legível para o usuário saber que foi "Sem Apontamento"
+        mask_falta_ex = (df_matriz_excel['H_REAL_LIQ'] > 0.1) & (df_matriz_excel['HORAS_DEC'] < 0.1)
+        df_matriz_excel.loc[mask_falta_ex, 'MATRIZ_VAL'] = -1
+
+        pivot_excel = df_matriz_excel.pivot_table(index=['SETOR', 'GESTOR', 'NOME_FINAL'], columns='DT_REF',
+                                                  values='MATRIZ_VAL', aggfunc='mean').reset_index()
+
+        # Formata os nomes das colunas de data para DD/MM no Excel e converte o -1
+        novas_colunas = []
+        for c in pivot_excel.columns:
+            if isinstance(c, datetime) or hasattr(c, 'strftime'):
+                col_name = c.strftime('%d/%m')
+                novas_colunas.append(col_name)
+                # Formata a coluna específica da data
+                pivot_excel[c] = pivot_excel[c].apply(
+                    lambda x: "Sem Apont." if x == -1 else ("-" if pd.isna(x) or x == 0 else round(x, 1)))
+            else:
+                novas_colunas.append(str(c))
+
+        pivot_excel.columns = novas_colunas
+
         df_export.to_excel(writer, sheet_name="Base Detalhada", index=False)
         df_setor.to_excel(writer, sheet_name="Ranking Setores", index=False)
         df_rank_excel.to_excel(writer, sheet_name="Ranking Colaboradores", index=False)
+        pivot_excel.to_excel(writer, sheet_name="Matriz Diaria", index=False)
 
     bytes_excel = excel_io.getvalue()
 
@@ -832,7 +949,6 @@ with st.sidebar:
     st.header("🔍 Filtros de Auditoria")
 
     min_d, max_d = df['DT_REF'].min(), df['DT_REF'].max()
-    # MODIFICAÇÃO: Removido min_value e max_value. Agora você pode selecionar qualquer data (ex: mês inteiro)
     datas = st.date_input("Período de Análise", [min_d, max_d])
 
     # 1. Filtro MÚLTIPLO de Gestor (Pré-Selecionado por padrão)
@@ -840,7 +956,6 @@ with st.sidebar:
     sel_gestores = st.multiselect("Liderança (Gestor)", options=lista_gestores, default=lista_gestores,
                                   help="Remova no 'X' as lideranças que não deseja ver")
 
-    # Previne quebra se o usuário desmarcar tudo
     if not sel_gestores:
         df_temp_g = df.iloc[0:0]
     else:
@@ -926,14 +1041,15 @@ ui_kpi_card(c4, "Alerta Refeição", f"{dias_sem_refeicao}",
 st.markdown("<br>", unsafe_allow_html=True)
 
 # ABAS
-tab_setor, tab_rank, tab_cal, tab_dados = st.tabs(
-    ["🏆 Ranking de Setores", "🏅 Desempenho de Colaboradores", "📅 Calendário", "📋 Tabela Analítica"])
+tab_setor, tab_rank, tab_matriz, tab_dados = st.tabs(
+    ["🏆 Ranking de Setores", "🏅 Desempenho de Colaboradores", "📅 Matriz de Apontamento", "📋 Tabela Analítica"])
 
 with tab_setor:
     st.markdown("##### 🏆 Desempenho de Equipes (Por Setor)")
     st.caption("Avaliando quais setores (independente de gestor) possuem as melhores práticas operacionais.")
 
     if not df_view.empty:
+        # Removido 'GESTOR' do agrupamento para focar 100% no setor conforme pedido
         df_g = df_view.groupby(['SETOR']).agg({
             'H_REAL_LIQ': 'sum',
             'HORAS_DEC': 'sum',
@@ -1001,19 +1117,55 @@ with tab_rank:
         )
         st.plotly_chart(fig_rank, use_container_width=True)
 
-with tab_cal:
-    st.markdown("##### Mapa de Calor: Assiduidade e Apontamento")
-    try:
-        pivot = df_view.pivot_table(index='NOME_FINAL', columns='DT_REF', values='EFICIENCIA_VISUAL',
-                                    aggfunc='mean').fillna(0)
-        h_calc = max(400, len(pivot) * 25)
-        fig = px.imshow(pivot, aspect="auto", color_continuous_scale=['#EF4444', '#F59E0B', '#10B981'],
-                        labels=dict(x="Dia", y="Colaborador", color="Eficiência %"),
-                        x=[d.strftime('%d/%m') for d in pivot.columns])
-        fig.update_layout(height=h_calc)
-        st.plotly_chart(fig, use_container_width=True)
-    except:
-        st.info("Sem dados para o calendário.")
+with tab_matriz:
+    st.markdown("##### 🗓️ Matriz de Eficiência por Dia do Mês (%)")
+    st.caption(
+        "Verde: >=85% | Amarelo: 70 a 84% | Vermelho: <70% | 🟠 **Laranja: Falta de Apontamento** | Cinza Claro: Folga.")
+
+    if not df_view.empty:
+        # Prepara a Matriz para exibir Falta de Apontamento (-1)
+        df_matriz = df_view.copy()
+        mask_falta = (df_matriz['H_REAL_LIQ'] > 0.1) & (df_matriz['HORAS_DEC'] < 0.1)
+        df_matriz['MATRIZ_VAL'] = df_matriz['EFICIENCIA_VISUAL']
+        df_matriz.loc[mask_falta, 'MATRIZ_VAL'] = -1
+
+        # Cria a Matriz com Pandas Pivot Table
+        pivot_ui = df_matriz.pivot_table(index=['SETOR', 'NOME_FINAL'], columns='DT_REF', values='MATRIZ_VAL',
+                                         aggfunc='mean')
+
+        # Formata o cabeçalho das colunas (Datas) para exibir "Dia/Mês"
+        pivot_ui.columns = [d.strftime('%d/%m') for d in pivot_ui.columns]
+
+
+        # Função para aplicar cores nativas na tabela
+        def color_efficiency(val):
+            if pd.isna(val) or val == 0:
+                return 'background-color: #F3F4F6; color: #9CA3AF;'  # Cinza
+            if val == -1:
+                return 'background-color: #FED7AA; color: #9A3412; font-weight: bold;'  # Laranja
+            if val >= 85:
+                return 'background-color: #BBF7D0; color: #166534; font-weight: bold;'  # Verde
+            if val >= 70:
+                return 'background-color: #FEF08A; color: #A16207; font-weight: bold;'  # Amarelo
+            return 'background-color: #FECACA; color: #991B1B; font-weight: bold;'  # Vermelho
+
+
+        def format_val(val):
+            if pd.isna(val) or val == 0: return "-"
+            if val == -1: return "0"
+            return f"{val:.0f}"
+
+
+        # Aplica a cor e plota a tabela no Streamlit
+        try:
+            styled_df = pivot_ui.style.map(color_efficiency).format(format_val)
+        except AttributeError:
+            # Fallback de segurança para versões ainda mais antigas do pandas
+            styled_df = pivot_ui.style.applymap(color_efficiency).format(format_val)
+
+        st.dataframe(styled_df, use_container_width=True, height=600)
+    else:
+        st.info("Sem dados para renderizar a matriz de calendário.")
 
 with tab_dados:
     st.markdown("##### 🔍 Extração Analítica")
