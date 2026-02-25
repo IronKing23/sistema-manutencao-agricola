@@ -35,7 +35,7 @@ load_custom_css()
 icon_main = get_icon("dashboard", "#2196F3", "36")
 ui_header(
     title="Relatório Gerencial de Custos",
-    subtitle="Análise de consumo de materiais e serviços de terceiros por Centro de Custo.",
+    subtitle="Auditoria financeira, análise de requisições e consumo por Centro de Custo.",
     icon=icon_main
 )
 
@@ -55,9 +55,13 @@ def formatar_moeda(valor):
 
 
 class RelatorioPDF(FPDF):
-    def __init__(self, titulo_relatorio="Relatorio de Custos, Cedro", *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, titulo_relatorio="Relatorio de Custos, Cedro", orientacao='L', *args, **kwargs):
+        # A orientação agora é recebida dinamicamente
+        super().__init__(orientation=orientacao, format='A4', *args, **kwargs)
         self.titulo_relatorio = titulo_relatorio
+        self.orientacao = orientacao
+        # Largura útil da folha A4 (210x297): Paisagem = 297-20 = 277mm | Retrato = 210-20 = 190mm
+        self.largura_util = 277 if orientacao == 'L' else 190
 
     def header(self):
         caminho_logo = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logo_cedro.png")
@@ -72,13 +76,13 @@ class RelatorioPDF(FPDF):
         titulo = self.titulo_relatorio.encode('latin-1', 'replace').decode('latin-1')
         self.cell(0, 10, titulo, 0, 1, 'C')
 
-        # Linha Divisória de Cabeçalho mais elegante
-        self.set_draw_color(22, 102, 53)  # Verde Cedro
+        # Linha Divisória Adaptável
+        self.set_draw_color(22, 102, 53)
         self.set_line_width(0.5)
         y_linha = max(self.get_y() + 2, 22)
-        self.line(10, y_linha, 200, y_linha)
+        self.line(10, y_linha, 10 + self.largura_util, y_linha)
         self.set_y(y_linha + 5)
-        self.set_line_width(0.2)  # Reseta grossura da linha
+        self.set_line_width(0.2)
 
     def footer(self):
         self.set_y(-15)
@@ -86,7 +90,7 @@ class RelatorioPDF(FPDF):
         self.set_text_color(150, 150, 150)
 
         self.set_draw_color(220, 220, 220)
-        self.line(10, self.get_y() - 2, 200, self.get_y() - 2)
+        self.line(10, self.get_y() - 2, 10 + self.largura_util, self.get_y() - 2)
 
         data_hora_atual = datetime.now().strftime('%d/%m/%Y %H:%M')
         texto_rodape = f'Emitido automaticamente via Sistema Cedro em: {data_hora_atual}  |  Pagina {self.page_no()}'
@@ -96,8 +100,8 @@ class RelatorioPDF(FPDF):
 
 
 @st.cache_data(show_spinner="Processando arquivos e gerando relatórios PDF/Excel...", ttl=600)
-def processar_e_gerar_relatorios(df, data_inicio, data_fim, nome_relatorio, label_item):
-    df = df.copy()  # Evita alertas do pandas
+def processar_e_gerar_relatorios(df, data_inicio, data_fim, nome_relatorio, label_item, orientacao_pdf='L'):
+    df = df.copy()
     df['DATA_UTILIZACAO'] = pd.to_datetime(df['DATA_UTILIZACAO'], dayfirst=True, errors='coerce')
     df = df.dropna(subset=['DATA_UTILIZACAO', 'CENTRO_CUSTO'])
 
@@ -110,43 +114,54 @@ def processar_e_gerar_relatorios(df, data_inicio, data_fim, nome_relatorio, labe
         df['UN'] = df['UN'].fillna('-').astype(str)
 
     if 'REQUISITANTE' not in df.columns:
-        df['REQUISITANTE'] = ''
+        df['REQUISITANTE'] = 'Não Informado'
     else:
-        df['REQUISITANTE'] = df['REQUISITANTE'].fillna('').astype(str)
+        df['REQUISITANTE'] = df['REQUISITANTE'].fillna('Não Informado').astype(str)
+        df['REQUISITANTE'] = df['REQUISITANTE'].replace(['nan', '-', ''], 'Não Informado')
 
-    # --- NOVO: CONCATENAÇÃO INTELIGENTE (Cria Quebra de Linha Verdadeira) ---
     def integrar_descricao(row):
         mat = str(row['MATERIAL']).strip()
         req = str(row['REQUISITANTE']).strip()
-        if req and req.lower() != 'nan' and req != '-':
+        if req and req != 'Não Informado':
             return f"{mat}\nDetalhamento: {req}"
         return mat
 
-    df['MATERIAL'] = df.apply(integrar_descricao, axis=1)
+    df['MATERIAL_COMPLETO'] = df.apply(integrar_descricao, axis=1)
 
-    # --- NOVA FUNÇÃO PARA TEXTOS LONGOS COM MULTILINE ---
-    def desenhar_linha_multicell(pdf_obj, textos, larguras, alinhamentos, fill_row):
+    # --- VARIÁVEIS DE GEOMETRIA DINÂMICA (Baseado na Orientação) ---
+    w_total = 277 if orientacao_pdf == 'L' else 190
+
+    # Limites estendidos para usar o máximo da folha antes de quebrar a página
+    max_y_page = 190 if orientacao_pdf == 'L' else 277
+
+    w_t20 = [160, 67, 50] if orientacao_pdf == 'L' else [100, 50, 40]
+    w_rcc = [217, 60] if orientacao_pdf == 'L' else [140, 50]
+    w_req = [217, 60] if orientacao_pdf == 'L' else [140, 50]
+    w_det = [177, 20, 30, 50] if orientacao_pdf == 'L' else [105, 15, 25, 45]
+    w_abc = [177, 30, 30, 40] if orientacao_pdf == 'L' else [105, 20, 25, 40]
+    w_cc_hm = 60 if orientacao_pdf == 'L' else 40
+
+    # --- FUNÇÃO OTIMIZADA COM REPETIÇÃO DE CABEÇALHO E CORREÇÃO DE COR ---
+    def desenhar_linha_multicell(pdf_obj, textos, larguras, alinhamentos, fill_row, func_cabecalho=None):
         pdf_obj.set_font('Arial', '', 8)
-
         texto_material = str(textos[0]).encode('latin-1', 'replace').decode('latin-1')
 
-        # Calcula largura do texto para estimar quantas quebras de linha ele terá
         largura_util = larguras[0] - 2
         largura_texto = pdf_obj.get_string_width(texto_material)
         linhas_estimadas = max(1, int((largura_texto / largura_util) + 0.9))
 
-        # Define a altura da célula para comportar o texto
         altura_linha = 4
         altura_total = max(6, (linhas_estimadas * altura_linha) + 2)
 
-        # Checa quebra de página automática do FPDF (280mm é o limite da folha A4 retrato)
-        if pdf_obj.get_y() + altura_total > 280:
+        # Limite dinâmico de segurança contra páginas em branco (e textos cortados)
+        if pdf_obj.get_y() + altura_total > max_y_page:
             pdf_obj.add_page()
+            if func_cabecalho:
+                func_cabecalho()
 
         x_inicial = pdf_obj.get_x()
         y_inicial = pdf_obj.get_y()
 
-        # Desenha o fundo (Zebra)
         if fill_row:
             pdf_obj.set_fill_color(245, 247, 250)
         else:
@@ -154,20 +169,19 @@ def processar_e_gerar_relatorios(df, data_inicio, data_fim, nome_relatorio, labe
 
         pdf_obj.rect(x_inicial, y_inicial, sum(larguras), altura_total, 'F')
 
-        # Desenha a borda inferior
         pdf_obj.set_draw_color(220, 220, 220)
         pdf_obj.line(x_inicial, y_inicial + altura_total, x_inicial + sum(larguras), y_inicial + altura_total)
 
-        # Imprime a 1a coluna (Material) aplicando a quebra de texto
+        # CORREÇÃO CRUCIAL AQUI: Garante que a cor do texto volta para cinza escuro,
+        # impedindo que o texto herde a cor branca usada nos cabeçalhos da tabela!
+        pdf_obj.set_text_color(40, 40, 40)
+
         pdf_obj.set_xy(x_inicial, y_inicial + 1)
         pdf_obj.multi_cell(larguras[0], altura_linha, f" {texto_material}", 0, alinhamentos[0])
 
-        # Capta a posição Y real após a escrita (caso a estimativa erre alguma linha)
         y_final_real = max(y_inicial + altura_total, pdf_obj.get_y() + 1)
         altura_final = y_final_real - y_inicial
 
-        # Imprime as demais colunas alinhadas
-        pdf_obj.set_text_color(40, 40, 40)
         for i in range(1, len(textos)):
             x_atual = x_inicial + sum(larguras[:i])
             pdf_obj.set_xy(x_atual, y_inicial)
@@ -180,12 +194,11 @@ def processar_e_gerar_relatorios(df, data_inicio, data_fim, nome_relatorio, labe
 
             pdf_obj.cell(larguras[i], altura_final, texto_celula, 0, 0, alinhamentos[i])
 
-        # Posiciona cursor na próxima linha corretamente
         pdf_obj.set_xy(x_inicial, y_final_real)
 
     excel_io = io.BytesIO()
 
-    pdf = RelatorioPDF(titulo_relatorio=nome_relatorio)
+    pdf = RelatorioPDF(titulo_relatorio=nome_relatorio, orientacao=orientacao_pdf)
     pdf.set_margins(10, 10, 10)
     pdf.set_auto_page_break(auto=True, margin=15)
 
@@ -213,7 +226,7 @@ def processar_e_gerar_relatorios(df, data_inicio, data_fim, nome_relatorio, labe
         maior_mat_resumo = mat_agrupado_resumo.iloc[0]['MATERIAL']
         maior_mat_valor_resumo = mat_agrupado_resumo.iloc[0]['VALOR_TOTAL']
 
-        # Prepara Curva ABC globalmente para o Excel
+        # Prepara Curva ABC
         df_pareto = mat_agrupado_resumo.copy()
         df_pareto['% Acumulado'] = (df_pareto['VALOR_TOTAL'].cumsum() / df_pareto['VALOR_TOTAL'].sum()) * 100
         df_pareto['Classe'] = pd.cut(df_pareto['% Acumulado'], bins=[0, 80, 95, 100], labels=['A', 'B', 'C'],
@@ -231,64 +244,55 @@ def processar_e_gerar_relatorios(df, data_inicio, data_fim, nome_relatorio, labe
         # CARDS DE KPI (DASHBOARD NO PDF)
         # ==============================================================================
         y_kpi = pdf.get_y()
+        largura_card = (w_total - 10) / 3
 
-        # CARD 1: Custo Total
+        # CARD 1
         pdf.set_fill_color(248, 250, 252)
         pdf.set_draw_color(226, 232, 240)
-        pdf.rect(10, y_kpi, 58, 22, 'DF')
-
-        pdf.set_xy(12, y_kpi + 4)
-        pdf.set_font('Arial', 'B', 8)
-        pdf.set_text_color(100, 116, 139)  # Texto Cinza Platinado
-        pdf.cell(54, 5, "CUSTO TOTAL NO PERIODO", 0, 1, 'C')
-
-        pdf.set_xy(12, y_kpi + 10)
-        pdf.set_font('Arial', 'B', 12)
-        pdf.set_text_color(15, 23, 42)  # Quase Preto
-        pdf.cell(54, 7, formatar_moeda(total_gasto_resumo), 0, 1, 'C')
-
-        # CARD 2: Maior Centro de Custo
-        pdf.set_fill_color(248, 250, 252)
-        pdf.rect(72, y_kpi, 62, 22, 'DF')
-
-        pdf.set_xy(74, y_kpi + 4)
-        pdf.set_font('Arial', 'B', 8)
+        pdf.rect(10, y_kpi, largura_card, 22, 'DF')
+        pdf.set_xy(12, y_kpi + 4);
+        pdf.set_font('Arial', 'B', 8);
         pdf.set_text_color(100, 116, 139)
-        pdf.cell(58, 5, "PRINCIPAL CENTRO CUSTO", 0, 1, 'C')
+        pdf.cell(largura_card - 4, 5, "CUSTO TOTAL NO PERIODO", 0, 1, 'C')
+        pdf.set_xy(12, y_kpi + 10);
+        pdf.set_font('Arial', 'B', 12);
+        pdf.set_text_color(15, 23, 42)
+        pdf.cell(largura_card - 4, 7, formatar_moeda(total_gasto_resumo), 0, 1, 'C')
 
-        pdf.set_xy(74, y_kpi + 10)
-        pdf.set_font('Arial', 'B', 10)
+        # CARD 2
+        pos_x2 = 10 + largura_card + 5
+        pdf.rect(pos_x2, y_kpi, largura_card, 22, 'DF')
+        pdf.set_xy(pos_x2 + 2, y_kpi + 4);
+        pdf.set_font('Arial', 'B', 8);
+        pdf.set_text_color(100, 116, 139)
+        pdf.cell(largura_card - 4, 5, "PRINCIPAL CENTRO CUSTO", 0, 1, 'C')
+        pdf.set_xy(pos_x2 + 2, y_kpi + 10);
+        pdf.set_font('Arial', 'B', 10);
         pdf.set_text_color(15, 23, 42)
         cc_txt = str(maior_cc_resumo)[:20].encode('latin-1', 'replace').decode('latin-1')
-        pdf.cell(58, 7, cc_txt, 0, 1, 'C')
+        pdf.cell(largura_card - 4, 7, cc_txt, 0, 1, 'C')
 
-        # CARD 3: Maior Impacto (Material/Serviço)
-        pdf.rect(138, y_kpi, 62, 22, 'DF')
-
-        pdf.set_xy(140, y_kpi + 4)
-        pdf.set_font('Arial', 'B', 8)
+        # CARD 3
+        pos_x3 = pos_x2 + largura_card + 5
+        pdf.rect(pos_x3, y_kpi, largura_card, 22, 'DF')
+        pdf.set_xy(pos_x3 + 2, y_kpi + 4);
+        pdf.set_font('Arial', 'B', 8);
         pdf.set_text_color(100, 116, 139)
         lbl_impacto = f"MAIOR IMPACTO ({label_item[:10].upper()})"
-        pdf.cell(58, 5, lbl_impacto.encode('latin-1', 'replace').decode('latin-1'), 0, 1, 'C')
-
-        pdf.set_xy(140, y_kpi + 10)
-        pdf.set_font('Arial', 'B', 9)
+        pdf.cell(largura_card - 4, 5, lbl_impacto.encode('latin-1', 'replace').decode('latin-1'), 0, 1, 'C')
+        pdf.set_xy(pos_x3 + 2, y_kpi + 10);
+        pdf.set_font('Arial', 'B', 9);
         pdf.set_text_color(15, 23, 42)
-
-        # Evita quebra de layout no Card 3 truncando a string (pois contém \n agora)
         m_str = str(maior_mat_resumo).replace('\n', ' - ')
         mat_txt = (m_str[:26] + '..') if len(m_str) > 28 else m_str
         mat_txt = mat_txt.encode('latin-1', 'replace').decode('latin-1')
-        pdf.cell(58, 7, mat_txt, 0, 1, 'C')
+        pdf.cell(largura_card - 4, 7, mat_txt, 0, 1, 'C')
 
-        pdf.set_xy(10, y_kpi + 28)  # Retorna o cursor para debaixo dos cards
+        pdf.set_xy(10, y_kpi + 28)
         pdf.ln(2)
 
-        # ==============================================================================
-        # TEXTO DE RESUMO DESCRITIVO
-        # ==============================================================================
+        # TEXTO DE RESUMO
         pdf.set_text_color(0, 0, 0)
-
         pdf.set_font('Arial', 'B', 11)
         pdf.cell(0, 6, "1. Custo Total no Periodo:", 0, 1)
         pdf.set_font('Arial', '', 10)
@@ -307,9 +311,6 @@ def processar_e_gerar_relatorios(df, data_inicio, data_fim, nome_relatorio, labe
         pdf.set_font('Arial', 'B', 11)
         pdf.cell(0, 6, f"3. {label_item} de Maior Impacto:", 0, 1)
         pdf.set_font('Arial', '', 10)
-
-        # Garante que descrições longas não destruam a frase do resumo
-        m_str = str(maior_mat_resumo).replace('\n', ' - ')
         txt_mat = (m_str[:80] + '...') if len(m_str) > 80 else m_str
         txt_mat = txt_mat.encode('latin-1', 'replace').decode('latin-1')
         pdf.cell(0, 6, f"   O item/servico mais custoso foi '{txt_mat}',", 0, 1)
@@ -317,64 +318,64 @@ def processar_e_gerar_relatorios(df, data_inicio, data_fim, nome_relatorio, labe
         pdf.ln(6)
 
         # ==============================================================================
-        # TABELAS ZEBRA PREMIUM (ORDEM INVERTIDA)
+        # TABELAS ZEBRA PREMIUM
         # ==============================================================================
 
         # --- SEÇÃO: TOP 20 GERAL NA CAPA ---
+        # Proteção contra título órfão (exige pelo menos 30mm de espaço)
+        if pdf.get_y() > max_y_page - 30: pdf.add_page()
         pdf.set_font('Arial', 'B', 12)
         pdf.set_text_color(22, 102, 53)
         pdf.cell(0, 8, f"Top 20 {label_item}s de Maior Custo (Visao Global)", 0, 1)
 
-        # Cabeçalho da Tabela
-        pdf.set_font('Arial', 'B', 9)
-        pdf.set_text_color(255, 255, 255)
-        pdf.set_fill_color(22, 102, 53)
-        pdf.set_draw_color(255, 255, 255)
-        lbl_head = f" {label_item}".encode('latin-1', 'replace').decode('latin-1')
-        pdf.cell(115, 7, lbl_head, 1, 0, 'L', fill=True)
-        pdf.cell(35, 7, " Centro de Custo", 1, 0, 'C', fill=True)
-        pdf.cell(40, 7, " Valor Total", 1, 1, 'R', fill=True)
+        def cabecalho_top_20():
+            pdf.set_font('Arial', 'B', 9)
+            pdf.set_text_color(255, 255, 255);
+            pdf.set_fill_color(22, 102, 53);
+            pdf.set_draw_color(255, 255, 255)
+            lbl_head = f" {label_item} / Detalhamento".encode('latin-1', 'replace').decode('latin-1')
+            pdf.cell(w_t20[0], 7, lbl_head, 1, 0, 'L', fill=True)
+            pdf.cell(w_t20[1], 7, " Centro de Custo", 1, 0, 'C', fill=True)
+            pdf.cell(w_t20[2], 7, " Valor Total", 1, 1, 'R', fill=True)
 
-        # Linhas (Zebra)
-        pdf.set_font('Arial', '', 8)
-        pdf.set_text_color(40, 40, 40)
-        pdf.set_draw_color(220, 220, 220)
+        cabecalho_top_20()
 
-        top_20_global = df_resumo.groupby(['MATERIAL', 'CENTRO_CUSTO'])['VALOR_TOTAL'].sum().reset_index().sort_values(
-            'VALOR_TOTAL', ascending=False).head(20)
+        top_20_global = df_resumo.groupby(['MATERIAL_COMPLETO', 'CENTRO_CUSTO'])[
+            'VALOR_TOTAL'].sum().reset_index().sort_values('VALOR_TOTAL', ascending=False).head(20)
 
         fill = False
         for _, row in top_20_global.iterrows():
-            mat_str = str(row['MATERIAL'])
-            cc_str = str(row['CENTRO_CUSTO'])[:25]
+            mat_str = str(row['MATERIAL_COMPLETO'])
+            cc_str = str(row['CENTRO_CUSTO'])[:35]
             val_str = formatar_moeda(row['VALOR_TOTAL'])
-
-            desenhar_linha_multicell(pdf, [mat_str, cc_str, val_str], [115, 35, 40], ['L', 'C', 'R'], fill)
+            desenhar_linha_multicell(pdf, [mat_str, cc_str, val_str], w_t20, ['L', 'C', 'R'], fill,
+                                     func_cabecalho=cabecalho_top_20)
             fill = not fill
 
         pdf.ln(8)
 
         # --- SEÇÃO: RESUMO POR CENTRO DE CUSTO ---
+        if pdf.get_y() > max_y_page - 30: pdf.add_page()
         pdf.set_font('Arial', 'B', 12)
         pdf.set_text_color(22, 102, 53)
         pdf.cell(0, 8, "Resumo por Centro de Custo", 0, 1)
 
-        # Cabeçalho da Tabela
-        pdf.set_font('Arial', 'B', 9)
-        pdf.set_text_color(255, 255, 255)  # Texto Branco
-        pdf.set_fill_color(22, 102, 53)  # Fundo Verde Cedro
-        pdf.set_draw_color(255, 255, 255)
-        pdf.cell(140, 7, " Centro de Custo", 1, 0, 'L', fill=True)
-        pdf.cell(50, 7, " Valor Total", 1, 1, 'R', fill=True)
+        def cabecalho_resumo_cc():
+            pdf.set_font('Arial', 'B', 9)
+            pdf.set_text_color(255, 255, 255);
+            pdf.set_fill_color(22, 102, 53);
+            pdf.set_draw_color(255, 255, 255)
+            pdf.cell(w_rcc[0], 7, " Centro de Custo", 1, 0, 'L', fill=True)
+            pdf.cell(w_rcc[1], 7, " Valor Total", 1, 1, 'R', fill=True)
 
-        # Linhas (Zebra) com a função corrigida
+        cabecalho_resumo_cc()
+
         fill = False
         for _, row in cc_agrupado_resumo.iterrows():
             cc_str = str(row['CENTRO_CUSTO'])
             val_str = formatar_moeda(row['VALOR_TOTAL'])
-
-            # Aqui estava o erro! Substituído pelo desenhar_linha_multicell para evitar problemas
-            desenhar_linha_multicell(pdf, [cc_str, val_str], [140, 50], ['L', 'R'], fill)
+            desenhar_linha_multicell(pdf, [cc_str, val_str], w_rcc, ['L', 'R'], fill,
+                                     func_cabecalho=cabecalho_resumo_cc)
             fill = not fill
 
         pdf.ln(10)
@@ -387,7 +388,6 @@ def processar_e_gerar_relatorios(df, data_inicio, data_fim, nome_relatorio, labe
     # EXPORTAÇÃO EXCEL E LOOP DE CENTROS DE CUSTO PARA O PDF
     with pd.ExcelWriter(excel_io) as writer:
 
-        # Excel: Exporta Curva ABC como a primeira aba
         if not df_pareto.empty:
             df_abc_export = df_pareto.copy()
             df_abc_export.rename(columns={'MATERIAL': label_item}, inplace=True)
@@ -396,76 +396,65 @@ def processar_e_gerar_relatorios(df, data_inicio, data_fim, nome_relatorio, labe
 
         for centro in centros_de_custo_ordenados:
             df_centro = df[df['CENTRO_CUSTO'] == centro]
-
             mask_periodo = (df_centro['DATA_UTILIZACAO'].dt.date >= data_inicio) & (
-                    df_centro['DATA_UTILIZACAO'].dt.date <= data_fim)
+                        df_centro['DATA_UTILIZACAO'].dt.date <= data_fim)
             df_periodo = df_centro[mask_periodo]
-
             if df_periodo.empty: continue
 
             nome_aba = re.sub(r'[\\/*?:\[\]]', '', str(centro))[:31]
-
-            totais_diarios = df_centro.groupby('DATA_UTILIZACAO')['VALOR_TOTAL'].sum().reset_index()
-            totais_diarios = totais_diarios.sort_values('DATA_UTILIZACAO')
+            totais_diarios = df_centro.groupby('DATA_UTILIZACAO')['VALOR_TOTAL'].sum().reset_index().sort_values(
+                'DATA_UTILIZACAO')
 
             img_temp = None
             if MATPLOTLIB_AVAILABLE:
-                fig, ax = plt.subplots(figsize=(8.5, 3))
-
-                # Gráfico com Estilo Moderno
+                # Estica os gráficos em modo paisagem para não ocuparem muita altura (evita quebrar de página)
+                fig_size = (12, 2.5) if orientacao_pdf == 'L' else (8.5, 2.5)
+                fig, ax = plt.subplots(figsize=fig_size)
                 ax.fill_between(totais_diarios['DATA_UTILIZACAO'], totais_diarios['VALOR_TOTAL'], color='#166635',
-                                alpha=0.1)  # Sombra embaixo da linha
+                                alpha=0.1)
                 ax.plot(totais_diarios['DATA_UTILIZACAO'], totais_diarios['VALOR_TOTAL'], marker='o', color='#166635',
                         linewidth=2, markersize=5)
-
                 ax.set_title(f'Evolucao de Custos', fontsize=11, fontweight='bold', color='#333333')
                 ax.grid(True, linestyle='--', alpha=0.4)
-
-                # Removendo bordas laterais para um visual mais limpo
-                ax.spines['top'].set_visible(False)
+                ax.spines['top'].set_visible(False);
                 ax.spines['right'].set_visible(False)
-                ax.spines['left'].set_color('#CCCCCC')
+                ax.spines['left'].set_color('#CCCCCC');
                 ax.spines['bottom'].set_color('#CCCCCC')
-
                 ax.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m'))
                 ax.tick_params(axis='x', labelsize=8, rotation=0, colors='#555555')
                 ax.tick_params(axis='y', labelsize=8, colors='#555555')
 
-                # FORMATAÇÃO AJUSTADA PARA R$ 00,00
-                def formato_moeda_grafico(x, pos):
-                    return f"R$ {x:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
+                def formato_moeda_grafico(x, pos): return f"R$ {x:,.2f}".replace(',', 'X').replace('.', ',').replace(
+                    'X', '.')
 
                 ax.yaxis.set_major_formatter(ticker.FuncFormatter(formato_moeda_grafico))
-
                 plt.tight_layout()
-
                 img_temp = tempfile.mktemp(suffix=".png")
                 arquivos_temporarios.append(img_temp)
                 fig.savefig(img_temp, dpi=150, bbox_inches='tight')
                 plt.close(fig)
 
-            if primeiro_centro:
+            # Evitar gráfico, título e cabeçalho órfãos (Necessita ~80mm garantidos)
+            espaco_seguranca = 85 if img_temp else 35
+            if pdf.get_y() > max_y_page - espaco_seguranca:
                 pdf.add_page()
-                primeiro_centro = False
-            else:
-                if pdf.get_y() > 190:
-                    pdf.add_page()
-                else:
-                    pdf.ln(10)
-                    pdf.set_draw_color(220, 220, 220)
-                    pdf.set_line_width(0.5)
-                    pdf.line(10, pdf.get_y(), 200, pdf.get_y())
-                    pdf.ln(8)
-                    pdf.set_line_width(0.2)
+            elif not primeiro_centro:
+                pdf.ln(10);
+                pdf.set_draw_color(220, 220, 220);
+                pdf.set_line_width(0.5)
+                pdf.line(10, pdf.get_y(), 10 + w_total, pdf.get_y());
+                pdf.ln(8);
+                pdf.set_line_width(0.2)
 
-            pdf.set_font('Arial', 'B', 14)
+            primeiro_centro = False
+
+            pdf.set_font('Arial', 'B', 14);
             pdf.set_text_color(22, 102, 53)
-
             titulo_centro = f"Centro de Custo: {centro}".encode('latin-1', 'replace').decode('latin-1')
             pdf.cell(0, 8, titulo_centro, 0, 1)
             pdf.ln(2)
 
-            if img_temp: pdf.image(img_temp, x=10, w=190)
+            if img_temp: pdf.image(img_temp, x=10, w=w_total)
             pdf.ln(4)
 
             dias_unicos_periodo = sorted(df_periodo['DATA_UTILIZACAO'].dt.date.unique(), reverse=True)
@@ -473,58 +462,48 @@ def processar_e_gerar_relatorios(df, data_inicio, data_fim, nome_relatorio, labe
 
             for dia in dias_unicos_periodo:
                 df_dia = df_periodo[df_periodo['DATA_UTILIZACAO'].dt.date == dia]
-
-                # Como a coluna MATERIAL já foi unificada no início do ETL, o agrupamento já herda tudo!
-                materiais_agrupados = df_dia.groupby('MATERIAL').agg({
-                    'UN': 'first',
-                    'QTD': 'sum',
-                    'VALOR_TOTAL': 'sum'
-                }).reset_index()
-
+                materiais_agrupados = df_dia.groupby('MATERIAL_COMPLETO').agg(
+                    {'UN': 'first', 'QTD': 'sum', 'VALOR_TOTAL': 'sum'}).reset_index()
                 top_20 = materiais_agrupados.sort_values('VALOR_TOTAL', ascending=False).head(20)
 
                 data_str = pd.to_datetime(dia).strftime('%d/%m/%Y')
                 linhas_excel.append(
                     {f'{label_item}': f'--- DATA: {data_str} ---', 'UN': '', 'Quantidade': '', 'Valor Total': ''})
 
-                # Sub-cabeçalho de Data (Banda Cinza)
-                pdf.set_font('Arial', 'B', 10)
-                pdf.set_fill_color(240, 240, 240)
-                pdf.set_text_color(22, 102, 53)
-                pdf.set_draw_color(240, 240, 240)
-                pdf.cell(0, 7, f" DATA DE UTILIZACAO: {data_str} (Top 20)", 1, 1, 'L', fill=True)
+                # Função de Cabeçalho Diário para repetir caso quebre página
+                def cabecalho_dia():
+                    pdf.set_font('Arial', 'B', 10)
+                    pdf.set_fill_color(240, 240, 240);
+                    pdf.set_text_color(22, 102, 53);
+                    pdf.set_draw_color(240, 240, 240)
+                    pdf.cell(0, 7, f" DATA DE UTILIZACAO: {data_str} (Top 20)", 1, 1, 'L', fill=True)
 
-                # Cabeçalho Colunas
-                pdf.set_font('Arial', 'B', 8)
-                pdf.set_text_color(255, 255, 255)
-                pdf.set_fill_color(22, 102, 53)
-                pdf.set_draw_color(255, 255, 255)
-                lbl_head2 = f" {label_item}".encode('latin-1', 'replace').decode('latin-1')
-                pdf.cell(105, 6, lbl_head2, 1, 0, 'L', fill=True)
-                pdf.cell(15, 6, " UN", 1, 0, 'C', fill=True)
-                pdf.cell(25, 6, " QTD", 1, 0, 'C', fill=True)
-                pdf.cell(45, 6, " Valor Total", 1, 1, 'R', fill=True)
-                # Linhas
-                pdf.set_font('Arial', '', 8)
-                pdf.set_text_color(40, 40, 40)
-                pdf.set_draw_color(220, 220, 220)
+                    pdf.set_font('Arial', 'B', 8)
+                    pdf.set_text_color(255, 255, 255);
+                    pdf.set_fill_color(22, 102, 53);
+                    pdf.set_draw_color(255, 255, 255)
+                    lbl_head2 = f" {label_item} / Detalhamento".encode('latin-1', 'replace').decode('latin-1')
+                    pdf.cell(w_det[0], 6, lbl_head2, 1, 0, 'L', fill=True)
+                    pdf.cell(w_det[1], 6, " UN", 1, 0, 'C', fill=True)
+                    pdf.cell(w_det[2], 6, " QTD", 1, 0, 'C', fill=True)
+                    pdf.cell(w_det[3], 6, " Valor Total", 1, 1, 'R', fill=True)
+
+                # Garante espaço para o cabeçalho e pelo menos 1 linha (~25mm)
+                if pdf.get_y() > max_y_page - 25: pdf.add_page()
+                cabecalho_dia()
 
                 fill_row = False
                 for _, mat in top_20.iterrows():
-                    mat_str = str(mat['MATERIAL'])
+                    mat_str = str(mat['MATERIAL_COMPLETO'])
                     un_str = str(mat['UN'])[:5]
                     qtd_str = str(mat['QTD'])
                     val_str = formatar_moeda(mat['VALOR_TOTAL'])
 
-                    desenhar_linha_multicell(pdf, [mat_str, un_str, qtd_str, val_str], [105, 15, 25, 45],
-                                             ['L', 'C', 'C', 'R'], fill_row)
+                    desenhar_linha_multicell(pdf, [mat_str, un_str, qtd_str, val_str], w_det, ['L', 'C', 'C', 'R'],
+                                             fill_row, func_cabecalho=cabecalho_dia)
 
-                    linhas_excel.append({
-                        f'{label_item}': mat_str,
-                        'UN': mat['UN'],
-                        'Quantidade': mat['QTD'],
-                        'Valor Total': mat['VALOR_TOTAL']
-                    })
+                    linhas_excel.append({f'{label_item}': mat_str, 'UN': mat['UN'], 'Quantidade': mat['QTD'],
+                                         'Valor Total': mat['VALOR_TOTAL']})
                     fill_row = not fill_row
 
                 linhas_excel.append({f'{label_item}': '', 'UN': '', 'Quantidade': '', 'Valor Total': ''})
@@ -554,23 +533,21 @@ def processar_e_gerar_relatorios(df, data_inicio, data_fim, nome_relatorio, labe
         pdf.ln(5)
 
         if MATPLOTLIB_AVAILABLE:
-            fig, ax1 = plt.subplots(figsize=(8.5, 3.5))
+            fig_size_abc = (14, 4.5) if orientacao_pdf == 'L' else (8.5, 4.5)
+            fig, ax1 = plt.subplots(figsize=fig_size_abc)
             top_30_pareto = df_pareto.head(30)
 
-            # Estética mais limpa
             ax1.bar(range(len(top_30_pareto)), top_30_pareto['VALOR_TOTAL'], color='#22C55E', alpha=0.9,
                     edgecolor='none')
             ax1.set_ylabel('Valor (R$)', color='#166635', fontsize=9)
             ax1.tick_params(axis='y', labelcolor='#166635', labelsize=8)
             ax1.set_xticks([])
 
-            ax1.spines['top'].set_visible(False)
-            ax1.spines['bottom'].set_visible(False)
+            ax1.spines['top'].set_visible(False);
+            ax1.spines['bottom'].set_visible(False);
             ax1.spines['left'].set_color('#CCCCCC')
 
-            # FORMATAÇÃO AJUSTADA PARA R$ 00,00
-            def formato_moeda_abc(x, pos):
-                return f"R$ {x:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
+            def formato_moeda_abc(x, pos): return f"R$ {x:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
 
             ax1.yaxis.set_major_formatter(ticker.FuncFormatter(formato_moeda_abc))
 
@@ -580,10 +557,10 @@ def processar_e_gerar_relatorios(df, data_inicio, data_fim, nome_relatorio, labe
             ax2.set_ylabel('% Acumulado', color='#F59E0B', fontsize=9)
             ax2.tick_params(axis='y', labelcolor='#F59E0B', labelsize=8)
             ax2.set_ylim([0, 105])
-            ax2.spines['top'].set_visible(False)
+            ax2.spines['top'].set_visible(False);
             ax2.spines['right'].set_color('#CCCCCC')
 
-            plt.title('Curva ABC - Visao Financeira', fontsize=11, fontweight='bold', color='#333333')
+            plt.title('Curva ABC - Visao Financeira', fontsize=12, fontweight='bold', color='#333333')
             plt.tight_layout()
 
             img_abc = tempfile.mktemp(suffix=".png")
@@ -591,24 +568,21 @@ def processar_e_gerar_relatorios(df, data_inicio, data_fim, nome_relatorio, labe
             fig.savefig(img_abc, dpi=150)
             plt.close(fig)
 
-            pdf.image(img_abc, x=10, w=190)
+            pdf.image(img_abc, x=10, w=w_total)
             pdf.ln(5)
 
-        # Tabela ABC (Top 20 itens) com Zebra
-        pdf.set_font('Arial', 'B', 9)
-        pdf.set_fill_color(22, 102, 53)
-        pdf.set_text_color(255, 255, 255)
-        pdf.set_draw_color(255, 255, 255)
+        def cabecalho_abc():
+            pdf.set_font('Arial', 'B', 9)
+            pdf.set_fill_color(22, 102, 53);
+            pdf.set_text_color(255, 255, 255);
+            pdf.set_draw_color(255, 255, 255)
+            lbl_head3 = f" {label_item}".encode('latin-1', 'replace').decode('latin-1')
+            pdf.cell(w_abc[0], 7, lbl_head3, 1, 0, 'L', fill=True)
+            pdf.cell(w_abc[1], 7, " Classe", 1, 0, 'C', fill=True)
+            pdf.cell(w_abc[2], 7, " % Acumul.", 1, 0, 'C', fill=True)
+            pdf.cell(w_abc[3], 7, " Valor Total", 1, 1, 'R', fill=True)
 
-        lbl_head3 = f" {label_item}".encode('latin-1', 'replace').decode('latin-1')
-        pdf.cell(105, 7, lbl_head3, 1, 0, 'L', fill=True)
-        pdf.cell(20, 7, " Classe", 1, 0, 'C', fill=True)
-        pdf.cell(25, 7, " % Acumul.", 1, 0, 'C', fill=True)
-        pdf.cell(40, 7, " Valor Total", 1, 1, 'R', fill=True)
-
-        pdf.set_font('Arial', '', 8)
-        pdf.set_text_color(40, 40, 40)
-        pdf.set_draw_color(220, 220, 220)
+        cabecalho_abc()
 
         fill_abc = False
         for _, row in df_pareto.head(20).iterrows():
@@ -616,13 +590,11 @@ def processar_e_gerar_relatorios(df, data_inicio, data_fim, nome_relatorio, labe
             classe_str = f"Classe {str(row['Classe'])}"
             pct_str = f"{row['% Acumulado']:.1f}%"
             val_str = formatar_moeda(row['VALOR_TOTAL'])
-
-            desenhar_linha_multicell(pdf, [mat_str, classe_str, pct_str, val_str], [105, 20, 25, 40],
-                                     ['L', 'C', 'C', 'R'], fill_abc)
+            desenhar_linha_multicell(pdf, [mat_str, classe_str, pct_str, val_str], w_abc, ['L', 'C', 'C', 'R'],
+                                     fill_abc, func_cabecalho=cabecalho_abc)
             fill_abc = not fill_abc
 
     bytes_excel = excel_io.getvalue()
-
     temp_pdf = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
     pdf_path = temp_pdf.name
     temp_pdf.close()
@@ -676,17 +648,17 @@ if arquivo_upload:
                 st.error(f"Faltam colunas na base. \n\n**Esperadas:** {', '.join(colunas_necessarias)}")
                 st.stop()
 
-            # --- VERIFICAÇÃO INTELIGENTE DO TIPO DE ITEM ---
             if 'TIPO_ITEM' not in df_lido.columns:
                 st.warning(
                     "A coluna 'TIPO_ITEM' não foi encontrada na planilha. O sistema assumirá que tudo é 'Material'.")
                 df_lido['TIPO_ITEM'] = 'MATERIAIS'
 
-            # --- GARANTIA DA COLUNA UN E REQUISITANTE ---
-            if 'UN' not in df_lido.columns:
-                df_lido['UN'] = '-'
+            if 'UN' not in df_lido.columns: df_lido['UN'] = '-'
             if 'REQUISITANTE' not in df_lido.columns:
-                df_lido['REQUISITANTE'] = ''
+                df_lido['REQUISITANTE'] = 'Não Informado'
+            else:
+                df_lido['REQUISITANTE'] = df_lido['REQUISITANTE'].fillna('Não Informado').astype(str)
+                df_lido['REQUISITANTE'] = df_lido['REQUISITANTE'].replace(['nan', '-', ''], 'Não Informado')
 
             if st.button("🚀 Processar Base de Dados", type="primary", use_container_width=True):
                 st.session_state['df_custos'] = df_lido
@@ -705,23 +677,34 @@ if 'df_custos' in st.session_state and st.session_state['df_custos'] is not None
     max_date = datas_disponiveis.max() if not datas_disponiveis.empty else datetime.today().date()
 
     # --- FILTROS AVANÇADOS NA UI ---
-    col_data, col_cc, col_tipo = st.columns([1, 1, 1])
-    with col_data:
-        datas_selecionadas = st.date_input(
-            "📅 Período de Análise:",
-            value=(min_date, max_date),
-            min_value=min_date, max_value=max_date
-        )
-    with col_cc:
+    with st.sidebar:
+        st.header("🔍 Filtros de Relatório")
+
+        st.markdown("##### 📅 Período")
+        datas_selecionadas = st.date_input("De / Até:", value=(min_date, max_date), min_value=min_date,
+                                           max_value=max_date)
+
+        st.markdown("##### 🏢 Centro de Custo")
         centros_disponiveis = sorted(df_base['CENTRO_CUSTO'].dropna().unique().tolist())
-        cc_selecionados = st.multiselect("Filtro de Centro de Custo:", options=centros_disponiveis,
-                                         default=[], help="Deixe em branco para incluir todos.")
-    with col_tipo:
-        tipo_filtro = st.selectbox(
-            "Tipo de Despesa:",
-            options=["🛠️ Materiais (Peças, Combustível)", "👷‍♂️ Serviços de Terceiros", "📊 Visão Consolidada (Ambos)"],
-            index=0
-        )
+        cc_selecionados = st.multiselect("Selecione os Centros:", options=centros_disponiveis, default=[],
+                                         help="Deixe em branco para incluir todos.")
+
+        st.markdown("##### 🛠️ Tipo de Despesa")
+        tipo_filtro = st.selectbox("Classificação:",
+                                   options=["🛠️ Materiais (Peças, Combustível)", "👷‍♂️ Serviços de Terceiros",
+                                            "📊 Visão Consolidada (Ambos)"], index=0)
+
+        # --- FILTRO CIRÚRGICO POR MATERIAL ---
+        st.markdown("##### 🔎 Busca Específica (Opcional)")
+        materiais_disponiveis = sorted(df_base['MATERIAL'].dropna().unique().tolist())
+        mat_selecionados = st.multiselect("Filtrar Itens/Serviços específicos:", options=materiais_disponiveis,
+                                          default=[], help="Força o relatório a analisar apenas eles.")
+
+        # --- ESCOLHA DE ORIENTAÇÃO DO PDF ---
+        st.markdown("---")
+        st.markdown("##### 🖨️ Configuração de Impressão")
+        orientacao_ui = st.radio("Formato do PDF:", ["Paisagem (Deitado)", "Retrato (Em pé)"], horizontal=True)
+        orientacao_pdf = 'L' if 'Paisagem' in orientacao_ui else 'P'
 
     if isinstance(datas_selecionadas, tuple) and len(datas_selecionadas) == 2:
         data_inicio, data_fim = datas_selecionadas
@@ -731,11 +714,11 @@ if 'df_custos' in st.session_state and st.session_state['df_custos'] is not None
 
     str_periodo = f"{data_inicio.strftime('%d/%m/%Y')} a {data_fim.strftime('%d/%m/%Y')}"
 
-    # --- APLICAÇÃO DE FILTROS (CENTRO DE CUSTO E TIPO DE DESPESA) ---
+    # --- APLICAÇÃO DE FILTROS ---
     df_filtrado = df_base.copy()
 
-    if cc_selecionados:
-        df_filtrado = df_filtrado[df_filtrado['CENTRO_CUSTO'].isin(cc_selecionados)]
+    if cc_selecionados: df_filtrado = df_filtrado[df_filtrado['CENTRO_CUSTO'].isin(cc_selecionados)]
+    if mat_selecionados: df_filtrado = df_filtrado[df_filtrado['MATERIAL'].isin(mat_selecionados)]
 
     df_filtrado['TIPO_ITEM_CLEAN'] = df_filtrado['TIPO_ITEM'].astype(str).str.strip().str.upper()
 
@@ -753,7 +736,7 @@ if 'df_custos' in st.session_state and st.session_state['df_custos'] is not None
 
     with st.spinner(f"Compilando {nome_relatorio.lower()}..."):
         excel_bytes, pdf_bytes, df_clean = processar_e_gerar_relatorios(df_filtrado, data_inicio, data_fim,
-                                                                        nome_relatorio, label_item)
+                                                                        nome_relatorio, label_item, orientacao_pdf)
 
     mask_ui = (df_clean['DATA_UTILIZACAO'].dt.date >= data_inicio) & (df_clean['DATA_UTILIZACAO'].dt.date <= data_fim)
     df_periodo_ui = df_clean[mask_ui]
@@ -773,7 +756,6 @@ if 'df_custos' in st.session_state and st.session_state['df_custos'] is not None
 
         st.markdown(f"### 📝 Resumo Executivo ({str_periodo})")
 
-        # Uso dos KPI Cards padronizados para o Resumo
         c_kpi1, c_kpi2, c_kpi3 = st.columns(3)
         ui_kpi_card(c_kpi1, "Custo Total no Período", formatar_moeda(total_gasto), get_icon("dashboard", "#2196F3"),
                     "#2196F3", "Gasto somado de todas as áreas")
@@ -789,29 +771,22 @@ if 'df_custos' in st.session_state and st.session_state['df_custos'] is not None
     st.markdown("<br>", unsafe_allow_html=True)
 
     # --- ABAS DE ANÁLISE ---
-    tab_graficos, tab_abc, tab_detalhes = st.tabs(
-        ["📈 Evolução & Pizza", "📊 Curva ABC (Pareto)", "📋 Detalhamento em Tabela"])
+    tab_dash, tab_abc, tab_detalhes = st.tabs(["📈 Dashboards Analíticos", "📊 Curva ABC (Pareto)", "📋 Detalhamento"])
 
-    with tab_graficos:
+    with tab_dash:
         c_linha, c_pizza = st.columns([2, 1])
 
         with c_linha:
             st.markdown("##### Evolução de Custos Diários")
             df_timeline = df_clean.groupby(['DATA_UTILIZACAO', 'CENTRO_CUSTO'])['VALOR_TOTAL'].sum().reset_index()
             fig_linha = px.line(df_timeline, x='DATA_UTILIZACAO', y='VALOR_TOTAL', color='CENTRO_CUSTO', markers=True,
-                                labels={'DATA_UTILIZACAO': 'Data', 'VALOR_TOTAL': 'Custo',
-                                        'CENTRO_CUSTO': 'Centro'})
-            # Adicionado tickformat e separadores para R$ 00,00
-            fig_linha.update_layout(
-                legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5),
-                yaxis_tickprefix="R$ ",
-                yaxis_tickformat=",.2f",
-                separators=".,"
-            )
+                                labels={'DATA_UTILIZACAO': 'Data', 'VALOR_TOTAL': 'Custo', 'CENTRO_CUSTO': 'Centro'})
+            fig_linha.update_layout(legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5),
+                                    yaxis_tickprefix="R$ ", yaxis_tickformat=",.2f", separators=".,")
             st.plotly_chart(fig_linha, use_container_width=True)
 
         with c_pizza:
-            st.markdown("##### Distribuição Global (Histórico)")
+            st.markdown("##### Distribuição Global")
             cc_agrupado_global = df_clean.groupby('CENTRO_CUSTO')['VALOR_TOTAL'].sum().reset_index().sort_values(
                 'VALOR_TOTAL', ascending=False)
             if len(cc_agrupado_global) > 6:
@@ -824,8 +799,6 @@ if 'df_custos' in st.session_state and st.session_state['df_custos'] is not None
 
             fig_pizza = px.pie(df_pizza, values='VALOR_TOTAL', names='CENTRO_CUSTO', hole=0.4,
                                color_discrete_sequence=px.colors.qualitative.Pastel)
-
-            # Adicionado formato de hover para mostrar a moeda corretamente no gráfico de pizza
             fig_pizza.update_traces(textposition='inside', textinfo='percent',
                                     hovertemplate="%{label}<br>R$ %{value:,.2f}<br>%{percent}")
             fig_pizza.update_layout(showlegend=True,
@@ -841,7 +814,6 @@ if 'df_custos' in st.session_state and st.session_state['df_custos'] is not None
                                                                                                          ascending=False)
             df_pareto['% Acumulado'] = (df_pareto['VALOR_TOTAL'].cumsum() / df_pareto['VALOR_TOTAL'].sum()) * 100
 
-            # Gráfico de Pareto combinado (Barras + Linha de %)
             fig_pareto = go.Figure()
             fig_pareto.add_trace(
                 go.Bar(x=df_pareto['MATERIAL'].head(30), y=df_pareto['VALOR_TOTAL'].head(30), name='Valor Total',
@@ -850,7 +822,6 @@ if 'df_custos' in st.session_state and st.session_state['df_custos'] is not None
                 go.Scatter(x=df_pareto['MATERIAL'].head(30), y=df_pareto['% Acumulado'].head(30), name='% Acumulado',
                            yaxis='y2', mode='lines+markers', line=dict(color='#F59E0B', width=3)))
 
-            # Adicionado tickformat e separadores para R$ 00,00
             fig_pareto.update_layout(
                 yaxis=dict(title='Custo', tickprefix="R$ ", tickformat=",.2f"),
                 yaxis2=dict(title='% Acumulado', overlaying='y', side='right', range=[0, 105]),
@@ -860,30 +831,19 @@ if 'df_custos' in st.session_state and st.session_state['df_custos'] is not None
             )
             st.plotly_chart(fig_pareto, use_container_width=True)
 
-            # Tabela Curva ABC
             df_pareto['Classe'] = pd.cut(df_pareto['% Acumulado'], bins=[0, 80, 95, 100],
                                          labels=['A (80%)', 'B (15%)', 'C (5%)'], right=True)
             st.dataframe(df_pareto.head(20), use_container_width=True, hide_index=True,
                          column_config={"VALOR_TOTAL": st.column_config.NumberColumn("Valor Total", format="R$ %.2f"),
                                         "% Acumulado": st.column_config.NumberColumn("% Acumulado", format="%.1f%%")})
-        else:
-            st.info("Nenhum dado para Análise de Pareto.")
 
     with tab_detalhes:
         st.markdown(f"##### 📋 Top itens consumidos no período")
         if not df_periodo_ui.empty:
-
-            # Como a coluna MATERIAL foi concatenada na fonte de dados do ETL, o agrupamento já reconhece o serviço unificado!
-            df_display = df_periodo_ui.groupby(['DATA_UTILIZACAO', 'CENTRO_CUSTO', 'MATERIAL']).agg({
-                'UN': 'first',
-                'QTD': 'sum',
-                'VALOR_TOTAL': 'sum'
-            }).reset_index()
-
+            df_display = df_periodo_ui.groupby(['DATA_UTILIZACAO', 'CENTRO_CUSTO', 'MATERIAL_COMPLETO']).agg(
+                {'UN': 'first', 'QTD': 'sum', 'VALOR_TOTAL': 'sum'}).reset_index()
             df_display = df_display.sort_values(by=['DATA_UTILIZACAO', 'CENTRO_CUSTO', 'VALOR_TOTAL'],
                                                 ascending=[False, True, False])
-
-            # Uso de ProgressColumn para melhor visualização na UI
             max_valor_display = float(df_display['VALOR_TOTAL'].max()) if not df_display.empty else 100.0
 
             st.dataframe(
@@ -892,23 +852,16 @@ if 'df_custos' in st.session_state and st.session_state['df_custos'] is not None
                 column_config={
                     "DATA_UTILIZACAO": st.column_config.DateColumn("Data", format="DD/MM/YYYY"),
                     "CENTRO_CUSTO": st.column_config.TextColumn("Centro de Custo"),
-                    "MATERIAL": st.column_config.TextColumn(f"{label_item.replace('Servico', 'Serviço')}",
-                                                            width="large"),
+                    "MATERIAL_COMPLETO": st.column_config.TextColumn(f"{label_item.replace('Servico', 'Serviço')}",
+                                                                     width="large"),
                     "UN": st.column_config.TextColumn("UN", width="small"),
                     "QTD": st.column_config.NumberColumn("Quantidade"),
-                    "VALOR_TOTAL": st.column_config.ProgressColumn(
-                        "Valor Total (R$)",
-                        format="R$ %.2f",
-                        min_value=0,
-                        max_value=max_valor_display
-                    )
+                    "VALOR_TOTAL": st.column_config.ProgressColumn("Valor Total (R$)", format="R$ %.2f", min_value=0,
+                                                                   max_value=max_valor_display)
                 }
             )
-        else:
-            st.info("Nenhum dado tabular disponível para este filtro.")
 
     st.markdown("---")
-
     st.markdown("### 🖨️ Documentos para Impressão")
     st.caption("Relatório otimizado em PDF e detalhamento bruto em Excel considerando os filtros aplicados.")
 
@@ -918,19 +871,11 @@ if 'df_custos' in st.session_state and st.session_state['df_custos'] is not None
 
     c_pdf, c_excel = st.columns(2)
     with c_pdf:
-        st.download_button(
-            label="📄 Descarregar Relatório PDF",
-            data=pdf_bytes,
-            file_name=f"Relatorio_{nome_padrao_arquivo}.pdf",
-            mime="application/pdf",
-            type="primary",
-            use_container_width=True
-        )
+        st.download_button(label="📄 Descarregar Relatório PDF", data=pdf_bytes,
+                           file_name=f"Relatorio_{nome_padrao_arquivo}.pdf", mime="application/pdf", type="primary",
+                           use_container_width=True)
     with c_excel:
-        st.download_button(
-            label="📊 Descarregar Tabela Excel",
-            data=excel_bytes,
-            file_name=f"Detalhe_{nome_padrao_arquivo}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True
-        )
+        st.download_button(label="📊 Descarregar Tabela Excel", data=excel_bytes,
+                           file_name=f"Detalhe_{nome_padrao_arquivo}.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                           use_container_width=True)
