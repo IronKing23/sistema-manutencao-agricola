@@ -86,7 +86,7 @@ class RelatorioPDF(FPDF):
 
 
 @st.cache_data(show_spinner="Compilando relatórios PDF/Excel Avançados...", ttl=600)
-def processar_e_gerar_relatorios_eficiencia(df_view, df_improd_global, dt_in, dt_out):
+def processar_e_gerar_relatorios_eficiencia(df_view, df_improd_global, dt_in, dt_out, df_espelho):
     excel_io = io.BytesIO()
     arquivos_temporarios = []
 
@@ -507,6 +507,7 @@ def processar_e_gerar_relatorios_eficiencia(df_view, df_improd_global, dt_in, dt
         pivot_matrix = pivot_matrix.sort_index(level=[0, 1])
 
         pdf.set_font('Arial', 'B', 6)
+        pdf.set_draw_color(220, 220, 220)
 
         for idx, row in pivot_matrix.iterrows():
             if pdf.get_y() > 185:
@@ -552,6 +553,114 @@ def processar_e_gerar_relatorios_eficiencia(df_view, df_improd_global, dt_in, dt
                 pdf.cell(w_dia, 5, txt, 1, 0, 'C', fill=True)
             pdf.ln()
 
+    # ==============================================================================
+    # PÁGINA 6: ESPELHO DE PONTO DIÁRIO (TODOS OS FUNCIONÁRIOS - SEM FILTRO)
+    # ==============================================================================
+    dias_unicos_espelho = sorted(df_espelho['DT_REF'].dropna().unique())
+    max_dias_espelho = min(len(dias_unicos_espelho), 31)
+    dias_to_plot_espelho = dias_unicos_espelho[:max_dias_espelho]
+
+    if max_dias_espelho > 0:
+        pdf.add_page()
+        pdf.set_font('Arial', 'B', 14)
+        pdf.set_text_color(22, 102, 53)
+        pdf.cell(0, 8, "Espelho de Ponto Diario (Jornada Realizada no RH)", 0, 1)
+
+        pdf.set_font('Arial', '', 8)
+        pdf.set_text_color(80, 80, 80)
+        pdf.cell(0, 5,
+                 "Legenda: Horarios exibidos em duas linhas (Entrada em cima, Saida embaixo). F = Folga, Feriado ou Compensado | - = Sem Registro",
+                 0, 1)
+        pdf.ln(2)
+
+        # Ajuste de larguras
+        w_setor_p = 35
+        w_nome_p = 50
+        w_dia_p = (277 - w_nome_p - w_setor_p) / max_dias_espelho if max_dias_espelho > 0 else 10
+
+        def print_matrix_ponto_header():
+            pdf.set_font('Arial', 'B', 7)
+            pdf.set_fill_color(22, 102, 53)
+            pdf.set_text_color(255, 255, 255)
+            pdf.cell(w_setor_p, 6, " Setor", 1, 0, 'L', fill=True)
+            pdf.cell(w_nome_p, 6, " Colaborador", 1, 0, 'L', fill=True)
+            for d in dias_to_plot_espelho:
+                pdf.cell(w_dia_p, 6, d.strftime('%d'), 1, 0, 'C', fill=True)
+            pdf.ln()
+
+        print_matrix_ponto_header()
+
+        # Matriz usando df_espelho (Base completa)
+        pivot_ponto = df_espelho.pivot_table(index=['SETOR', 'NOME_FINAL'], columns='DT_REF', values='REAL_H',
+                                             aggfunc='first')
+        pivot_ponto = pivot_ponto.sort_index(level=[0, 1])
+
+        pdf.set_draw_color(220, 220, 220)
+
+        for idx, row in pivot_ponto.iterrows():
+            if pdf.get_y() > 180:
+                pdf.add_page()
+                print_matrix_ponto_header()
+
+            setor, nome = idx
+            setor_str = str(setor)[:18].encode('latin-1', 'replace').decode('latin-1')
+            nome_str = str(nome)[:25].encode('latin-1', 'replace').decode('latin-1')
+
+            x_start_row = pdf.get_x()
+            y_start_row = pdf.get_y()
+
+            # Desenha células de Setor e Colaborador com altura maior (6mm)
+            pdf.set_text_color(40, 40, 40)
+            pdf.set_fill_color(245, 247, 250)
+            pdf.set_font('Arial', 'B', 6)
+            pdf.rect(x_start_row, y_start_row, w_setor_p, 6, 'DF')
+            pdf.set_xy(x_start_row, y_start_row + 1.5)
+            pdf.cell(w_setor_p, 3, f" {setor_str}", 0, 0, 'L')
+
+            x_nome = x_start_row + w_setor_p
+            pdf.rect(x_nome, y_start_row, w_nome_p, 6, 'DF')
+            pdf.set_xy(x_nome, y_start_row + 1.5)
+            pdf.cell(w_nome_p, 3, f" {nome_str}", 0, 0, 'L')
+
+            pdf.set_xy(x_nome + w_nome_p, y_start_row)
+            pdf.set_font('Arial', '', 4.5)
+
+            for d in dias_to_plot_espelho:
+                val = row.get(d, np.nan)
+                val_str = str(val).strip().upper()
+
+                if pd.isna(val) or val_str == 'NAN' or val_str == '-' or val_str == '':
+                    pdf.set_fill_color(240, 240, 240)
+                    pdf.set_text_color(180, 180, 180)
+                    parts = ["-"]
+                elif any(k in val_str for k in ['FOLGA', 'FERIADO', 'DSR', 'COMPENSADO']):
+                    pdf.set_fill_color(219, 234, 254)
+                    pdf.set_text_color(30, 58, 138)
+                    parts = ["F"]
+                else:
+                    pdf.set_fill_color(255, 255, 255)
+                    pdf.set_text_color(40, 40, 40)
+                    val_clean = val_str.replace(',', '.')
+                    parts = val_clean.split('/') if '/' in val_clean else [val_clean]
+
+                x_curr = pdf.get_x()
+                y_curr = pdf.get_y()
+
+                pdf.rect(x_curr, y_curr, w_dia_p, 6, 'DF')
+
+                if len(parts) == 1:
+                    pdf.set_xy(x_curr, y_curr + 1.5)
+                    pdf.cell(w_dia_p, 3, parts[0], 0, 0, 'C')
+                else:
+                    pdf.set_xy(x_curr, y_curr + 0.5)
+                    pdf.cell(w_dia_p, 2.5, parts[0], 0, 0, 'C')
+                    pdf.set_xy(x_curr, y_curr + 3)
+                    pdf.cell(w_dia_p, 2.5, parts[1], 0, 0, 'C')
+
+                pdf.set_xy(x_curr + w_dia_p, y_curr)
+
+            pdf.set_xy(10, y_start_row + 6)
+
     # --- GERAÇÃO DO EXCEL MULTI-ABA ---
     with pd.ExcelWriter(excel_io) as writer:
         colunas_excel = [
@@ -581,6 +690,7 @@ def processar_e_gerar_relatorios_eficiencia(df_view, df_improd_global, dt_in, dt
                            'Produtivo (h)', 'Improdutivo (h)', 'Eficiencia (%)', 'Dias sem Refeicao']
         df_rank_excel = df_rank_excel[cols_order_rank]
 
+        # Excel 1: Matriz de Eficiência
         df_matriz_excel = df_view.copy()
         df_matriz_excel['MATRIZ_VAL'] = df_matriz_excel['EFICIENCIA_VISUAL']
         mask_falta_ex = (df_matriz_excel['STATUS'] == 'CRÍTICO (Sem Apontamento)')
@@ -603,10 +713,25 @@ def processar_e_gerar_relatorios_eficiencia(df_view, df_improd_global, dt_in, dt
 
         pivot_excel.columns = novas_colunas
 
+        # Excel 2: ESPELHO DE PONTO DO RH (USANDO df_espelho - SEM FILTROS)
+        pivot_excel_ponto = df_espelho.pivot_table(index=['SETOR', 'GESTOR', 'NOME_FINAL'], columns='DT_REF',
+                                                   values='REAL_H', aggfunc='first').reset_index()
+        novas_colunas_pt = []
+        for c in pivot_excel_ponto.columns:
+            if isinstance(c, datetime) or hasattr(c, 'strftime'):
+                novas_colunas_pt.append(c.strftime('%d/%m'))
+            else:
+                novas_colunas_pt.append(str(c))
+
+        pivot_excel_ponto.columns = novas_colunas_pt
+        pivot_excel_ponto.fillna('-', inplace=True)
+
+        # Salva as Abas
         df_export.to_excel(writer, sheet_name="Base Detalhada", index=False)
         df_setor.to_excel(writer, sheet_name="Ranking Setores", index=False)
         df_rank_excel.to_excel(writer, sheet_name="Ranking Colaboradores", index=False)
         pivot_excel.to_excel(writer, sheet_name="Matriz Diaria", index=False)
+        pivot_excel_ponto.to_excel(writer, sheet_name="Espelho de Ponto", index=False)
 
         if not improd_filtered.empty:
             improd_agrupado.to_excel(writer, sheet_name="Raio-X Improdutividade", index=False)
@@ -746,7 +871,11 @@ def processar_dados_corporativos(file_pims, file_rh):
             'H_REAL_LIQ': 'sum'
         }).reset_index()
 
+        # Limpeza e Abreviação dos Nomes de Setor
         rh_agg['SETOR'] = rh_agg['SETOR'].str.replace(r'^\d+\s*-\s*', '', regex=True)
+        rh_agg['SETOR'] = rh_agg['SETOR'].str.replace(r'(?i)^SETOR\s+(DE\s+)?', '', regex=True)
+        rh_agg['SETOR'] = rh_agg['SETOR'].str.replace(r'(?i)^MANUTEN[CÇ][AÃ]O\s+', '', regex=True)
+        rh_agg['SETOR'] = rh_agg['SETOR'].str.strip().str.upper()
 
         df_final = pd.merge(rh_agg, pims_agg, left_on=['MAT_FULL', 'DT_REF'], right_on=['MATRICULA', 'DT_REF'],
                             how='outer')
@@ -964,6 +1093,10 @@ if type(datas) in (tuple, list):
 else:
     d_in, d_out = min_d, max_d
 
+# --- CAPTURA DA BASE DO ESPELHO DE PONTO (SEM FILTROS EXCETO DATA) ---
+df_espelho = df_view.copy()
+
+# --- APLICAÇÃO DOS DEMAIS FILTROS APENAS PARA O RELATÓRIO GERAL ---
 df_view = df_view[df_view['GESTOR'].isin(sel_gestores)]
 df_view = df_view[df_view['SETOR'].isin(sel_setores)]
 if sel_turmas: df_view = df_view[df_view['TURMA'].astype(str).isin(sel_turmas)]
@@ -1175,7 +1308,7 @@ st.caption("Exporte a análise cruzada num formato PDF otimizado (A4 deitado) pa
 
 with st.spinner("Desenhando gráficos e compilando PDF..."):
     df_improd_global = st.session_state.get('dataset_improd', pd.DataFrame())
-    excel_bytes, pdf_bytes = processar_e_gerar_relatorios_eficiencia(df_view, df_improd_global, d_in, d_out)
+    excel_bytes, pdf_bytes = processar_e_gerar_relatorios_eficiencia(df_view, df_improd_global, d_in, d_out, df_espelho)
 
 nome_padrao_arquivo = f"Auditoria_PeopleAnalytics_{d_in.strftime('%d%m%y')}_a_{d_out.strftime('%d%m%y')}"
 
