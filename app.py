@@ -196,6 +196,7 @@ paginas_config = [
     ("pages/7_Historico_Maquina.py", "Prontuário Máquina", "🚜", False),
     ("pages/10_Mapa_Atendimentos.py", "Mapa Geográfico", "🗺️", False),
     ("pages/18_relatorio_gastos.py", "Relatório de Custos", "💰", False),
+    ("pages/19_Gestao_Comboio.py", "Gestão de Comboio", "⛽", False),
 
     # Operacional
     ("pages/5_Nova_Ordem_Servico.py", "Nova O.S.", "📝", False),
@@ -224,11 +225,12 @@ if not lista_paginas_validas:
     st.error("Erro crítico: Nenhuma página encontrada. Verifique a pasta 'pages'.")
     st.stop()
 
+# Ajuste nos índices devido à nova página adicionada em Dashboards
 pg = st.navigation({
-    "Dashboards": lista_paginas_validas[:7],
-    "Operacional": lista_paginas_validas[7:11],
-    "Cadastros": lista_paginas_validas[11:15],
-    "Sistema": lista_paginas_validas[15:]
+    "Dashboards": lista_paginas_validas[:8],
+    "Operacional": lista_paginas_validas[8:12],
+    "Cadastros": lista_paginas_validas[12:16],
+    "Sistema": lista_paginas_validas[16:]
 })
 
 
