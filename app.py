@@ -188,7 +188,7 @@ def criar_pagina(arquivo, titulo, icone, default=False):
 
 
 paginas_config = [
-    # Dashboards
+    # Dashboards (AGORA COM 9 PÁGINAS)
     ("pages/0_Inicio.py", "Início", "🏠", True),
     ("pages/1_Painel_Principal.py", "Visão Geral", "📊", False),
     ("pages/15_Indicadores_KPI.py", "Indicadores (MTBF)", "📈", False),
@@ -197,20 +197,21 @@ paginas_config = [
     ("pages/10_Mapa_Atendimentos.py", "Mapa Geográfico", "🗺️", False),
     ("pages/18_relatorio_gastos.py", "Relatório de Custos", "💰", False),
     ("pages/19_Gestao_Comboio.py", "Gestão de Comboio", "⛽", False),
+    ("pages/18_Controle_Pneus.py", "Controle de Pneus", "🛞", False),
 
-    # Operacional
+    # Operacional (4 PÁGINAS)
     ("pages/5_Nova_Ordem_Servico.py", "Nova O.S.", "📝", False),
     ("pages/6_Gerenciar_Atendimento.py", "Gerenciar O.S.", "🔄", False),
     ("pages/11_Quadro_Avisos.py", "Mural de Avisos", "📌", False),
     ("pages/13_Comunicacao.py", "Central WhatsApp", "📱", False),
 
-    # Cadastros
+    # Cadastros (4 PÁGINAS)
     ("pages/2_Cadastro_Equipamentos.py", "Equipamentos", "🚛", False),
     ("pages/3_Cadastro_Funcionarios.py", "Funcionários", "👷", False),
     ("pages/4_Cadastro_Operacoes.py", "Tipos de Operação", "⚙️", False),
     ("pages/14_Cadastro_Areas.py", "Áreas / Talhões", "📍", False),
 
-    # Admin
+    # Admin (3 PÁGINAS)
     ("pages/9_Gestao_Usuarios.py", "Usuários", "🔐", False),
     ("pages/12_Auditoria.py", "Auditoria", "🕵️", False),
     ("pages/8_Backup_Seguranca.py", "Backup", "💾", False),
@@ -225,12 +226,12 @@ if not lista_paginas_validas:
     st.error("Erro crítico: Nenhuma página encontrada. Verifique a pasta 'pages'.")
     st.stop()
 
-# Ajuste nos índices devido à nova página adicionada em Dashboards
+# Ajuste nos índices devido à nova página adicionada em Dashboards (agora corta no índice 9)
 pg = st.navigation({
-    "Dashboards": lista_paginas_validas[:8],
-    "Operacional": lista_paginas_validas[8:12],
-    "Cadastros": lista_paginas_validas[12:16],
-    "Sistema": lista_paginas_validas[16:]
+    "Dashboards": lista_paginas_validas[:9],
+    "Operacional": lista_paginas_validas[9:13],
+    "Cadastros": lista_paginas_validas[13:17],
+    "Sistema": lista_paginas_validas[17:]
 })
 
 
