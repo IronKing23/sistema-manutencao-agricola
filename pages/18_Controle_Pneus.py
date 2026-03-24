@@ -8,6 +8,7 @@ import plotly.express as px
 import streamlit.components.v1 as components
 from fpdf import FPDF
 import tempfile
+import sqlite3
 from datetime import datetime
 
 # --- BLINDAGEM E IMPORTAÇÃO DO BANCO DE DADOS ---
@@ -16,6 +17,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 try:
     from utils_ui import load_custom_css, ui_header, ui_kpi_card, ui_empty_state
     from utils_icons import get_icon
+    from database import get_db_connection
 except ImportError:
     def load_custom_css():
         pass
@@ -42,6 +44,46 @@ except ImportError:
                 <div style="font-size:11px; color:#94A3B8;">{desc}</div>
             </div>
             """, unsafe_allow_html=True)
+
+
+    def get_db_connection():
+        return sqlite3.connect("manutencao.db")
+
+
+# ==============================================================================
+# INICIALIZAÇÃO DA TABELA DE HISTÓRICO (EVOLUÇÃO DIÁRIA)
+# ==============================================================================
+def criar_tabelas_historico():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS historico_saude_pneus (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            data_registro DATE,
+            equip_cod TEXT,
+            equip_desc TEXT,
+            total_pos INTEGER,
+            instalados INTEGER,
+            ausentes INTEGER,
+            percentual REAL
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+# Executa a verificação/criação ao abrir a página
+criar_tabelas_historico()
+
+
+def carregar_historico_salvo():
+    conn = get_db_connection()
+    df_hist = pd.read_sql("SELECT * FROM historico_saude_pneus ORDER BY data_registro ASC", conn)
+    conn.close()
+    if not df_hist.empty:
+        df_hist['data_registro'] = pd.to_datetime(df_hist['data_registro']).dt.date
+    return df_hist
+
 
 # Tentativa segura de importar o matplotlib para gráficos na Capa do PDF
 try:
@@ -151,7 +193,6 @@ def gerar_html_croqui(df_equip):
             row = p_df.iloc[0]
             pos = row['Pos_Desc']
             fogo = str(row['Pneu_Fogo'])
-            # Escapar aspas para evitar quebra do HTML
             desc_html = str(row['Pneu_Desc']).replace("'", "&#39;").replace('"', '&quot;')
 
             tooltip = f"<div class='tooltip'><b>ID:</b> {fogo}<br><b>Pos:</b> {pos}<br><b>Desc:</b> {desc_html}</div>"
@@ -710,7 +751,7 @@ if st.session_state['dataset_pneus'] is None:
 df = st.session_state['dataset_pneus']
 
 # ==============================================================================
-# BARRA LATERAL: FILTROS DE BUSCA E DIVERGÊNCIA
+# BARRA LATERAL: FILTROS E SALVAMENTO DE HISTÓRICO
 # ==============================================================================
 with st.sidebar:
     st.header("🔍 Filtros de Busca")
@@ -736,6 +777,42 @@ with st.sidebar:
         placeholder="Excluir do relatório (Opcional)",
         help="As frotas selecionadas aqui serão removidas do painel e não sairão no relatório PDF."
     )
+
+    st.markdown("---")
+    st.markdown("##### 💾 Histórico Diário")
+    st.caption("Salve o status global para acompanhar a evolução na aba de Histórico.")
+    if st.button("Gravar Posição do Dia", use_container_width=True, type="primary"):
+        # Recalcula a saúde para a frota completa (ignorando os filtros laterais)
+        df_health_total = df.groupby(['Equip_Cod', 'Equip_Desc']).agg(
+            Total_Pos=('Pos_Cod', 'count'),
+            Instalados=('Status', lambda x: (x == 'Instalado').sum())
+        ).reset_index()
+
+        df_health_total['Percentual'] = (df_health_total['Instalados'] / df_health_total['Total_Pos']) * 100
+        df_health_total['Faltas'] = df_health_total['Total_Pos'] - df_health_total['Instalados']
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        data_atual = datetime.now().date()
+
+        # Apaga o registro de hoje se já existir para não duplicar (mantém o snapshot mais recente do dia)
+        cursor.execute("DELETE FROM historico_saude_pneus WHERE data_registro = ?", (data_atual,))
+
+        for _, row in df_health_total.iterrows():
+            cursor.execute("""
+                INSERT INTO historico_saude_pneus (data_registro, equip_cod, equip_desc, total_pos, instalados, ausentes, percentual)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (data_atual, row['Equip_Cod'], row['Equip_Desc'], row['Total_Pos'], row['Instalados'], row['Faltas'],
+                  row['Percentual']))
+
+        conn.commit()
+        conn.close()
+        st.toast("Posição do dia salva no Histórico!", icon="✅")
+        # Usa um pequeno delay para o toast aparecer antes de recarregar
+        import time;
+
+        time.sleep(1);
+        st.rerun()
 
 # --- APLICAÇÃO DOS FILTROS ---
 frotas_validas = df['Equip_Cod'].unique().tolist()
@@ -820,8 +897,8 @@ st.markdown("<br>", unsafe_allow_html=True)
 # ==============================================================================
 # ABAS DA INTERFACE PRINCIPAL
 # ==============================================================================
-tab_dash, tab_croqui, tab_saude = st.tabs(
-    ["📈 Dashboard Executivo", "🔍 Inspeção Visual (Croqui)", "💯 Saúde da Frota (Score)"])
+tab_dash, tab_croqui, tab_saude, tab_evolucao = st.tabs(
+    ["📈 Dashboard Executivo", "🔍 Inspeção Visual (Croqui)", "💯 Saúde da Frota", "📉 Evolução Histórica"])
 
 with tab_dash:
     st.markdown("##### Visão Geral da Frota Filtrada")
@@ -842,7 +919,7 @@ with tab_dash:
             if not df_alertas.empty:
                 top_ausentes_web = df_alertas['Equip_Cod'].value_counts().head(10).reset_index()
                 top_ausentes_web.columns = ['Equipamento', 'Faltas']
-                top_ausentes_web['Equipamento'] = top_ausentes_web['Equipamento'].astype(str)  # Correção eixo Plotly
+                top_ausentes_web['Equipamento'] = top_ausentes_web['Equipamento'].astype(str)
 
                 fig_bar = px.bar(top_ausentes_web.sort_values('Faltas', ascending=True),
                                  x='Faltas', y='Equipamento', orientation='h',
@@ -854,7 +931,7 @@ with tab_dash:
             else:
                 top_eq_web = df_view['Equip_Desc'].value_counts().head(10).reset_index()
                 top_eq_web.columns = ['Tipo', 'Quantidade']
-                top_eq_web['Tipo'] = top_eq_web['Tipo'].astype(str)  # Correção eixo Plotly
+                top_eq_web['Tipo'] = top_eq_web['Tipo'].astype(str)
 
                 fig_bar = px.bar(top_eq_web.sort_values('Quantidade', ascending=True),
                                  x='Quantidade', y='Tipo', orientation='h',
@@ -928,7 +1005,6 @@ with tab_saude:
         df_health['Percentual'] = (df_health['Instalados'] / df_health['Total_Pos']) * 100
         df_health['Faltas'] = df_health['Total_Pos'] - df_health['Instalados']
 
-        # Ordena para mostrar as mais críticas no topo
         df_health = df_health.sort_values(by=['Percentual', 'Faltas'], ascending=[True, False])
 
         st.dataframe(
@@ -947,6 +1023,54 @@ with tab_saude:
         )
     else:
         st.info("Nenhuma frota disponível para gerar o Score de Saúde.")
+
+with tab_evolucao:
+    st.markdown("##### 📈 Evolução Histórica (Linha do Tempo)")
+    st.caption("Acompanhe como a saúde e o número de faltas progridem dia a dia.")
+
+    df_historico = carregar_historico_salvo()
+
+    if df_historico.empty:
+        st.info(
+            "Nenhum histórico gravado ainda. Utilize o botão 'Gravar Posição do Dia' na barra lateral para iniciar o seu histórico.")
+    else:
+        # Agrupamento Global (Todos os dados gravados por dia)
+        df_hist_global = df_historico.groupby('data_registro').agg(
+            Total_Pos=('total_pos', 'sum'),
+            Total_Instalados=('instalados', 'sum'),
+            Total_Faltas=('ausentes', 'sum')
+        ).reset_index()
+
+        df_hist_global['Saude_Global_Pct'] = (df_hist_global['Total_Instalados'] / df_hist_global['Total_Pos']) * 100
+
+        c_evo1, c_evo2 = st.columns(2)
+        with c_evo1:
+            fig_saude_evo = px.line(df_hist_global, x='data_registro', y='Saude_Global_Pct', markers=True,
+                                    title="Evolução da Saúde Global da Frota (%)", color_discrete_sequence=['#10B981'])
+            fig_saude_evo.update_layout(yaxis_title="% Calçado", xaxis_title="Data do Registro", yaxis_range=[0, 105],
+                                        margin=dict(t=40, b=10, l=10, r=10))
+            st.plotly_chart(fig_saude_evo, use_container_width=True)
+
+        with c_evo2:
+            fig_faltas_evo = px.line(df_hist_global, x='data_registro', y='Total_Faltas', markers=True,
+                                     title="Curva de Faltas (Pneus Ausentes)", color_discrete_sequence=['#EF4444'])
+            fig_faltas_evo.update_layout(yaxis_title="Total de Faltas", xaxis_title="Data do Registro",
+                                         yaxis={'rangemode': 'tozero'}, margin=dict(t=40, b=10, l=10, r=10))
+            st.plotly_chart(fig_faltas_evo, use_container_width=True)
+
+        st.markdown("---")
+        st.markdown("###### 🔍 Rastreio Específico por Máquina")
+        maquinas_historicas = sorted(df_historico['equip_cod'].unique().tolist())
+        maq_selecionadas = st.multiselect("Selecione até 5 máquinas para comparar a evolução de saúde lado a lado:",
+                                          options=maquinas_historicas, max_selections=5)
+
+        if maq_selecionadas:
+            df_hist_maq = df_historico[df_historico['equip_cod'].isin(maq_selecionadas)]
+            fig_maq_evo = px.line(df_hist_maq, x='data_registro', y='percentual', color='equip_cod', markers=True,
+                                  title="Comparativo de Saúde (%) por Máquina")
+            fig_maq_evo.update_layout(yaxis_title="% Calçado", xaxis_title="Data do Registro", yaxis_range=[0, 105],
+                                      margin=dict(t=40, b=10, l=10, r=10))
+            st.plotly_chart(fig_maq_evo, use_container_width=True)
 
 # ==============================================================================
 # EXPORTAÇÃO OFICIAL DO RELATÓRIO (PDF E VETORIAL LADO A LADO)
