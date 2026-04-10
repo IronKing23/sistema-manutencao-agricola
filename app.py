@@ -188,7 +188,7 @@ def criar_pagina(arquivo, titulo, icone, default=False):
 
 
 paginas_config = [
-    # Dashboards (AGORA COM 9 PÁGINAS)
+    # Dashboards (AGORA COM 10 PÁGINAS)
     ("pages/0_Inicio.py", "Início", "🏠", True),
     ("pages/1_Painel_Principal.py", "Visão Geral", "📊", False),
     ("pages/15_Indicadores_KPI.py", "Indicadores (MTBF)", "📈", False),
@@ -198,6 +198,7 @@ paginas_config = [
     ("pages/18_relatorio_gastos.py", "Relatório de Custos", "💰", False),
     ("pages/19_Gestao_Comboio.py", "Gestão de Comboio", "⛽", False),
     ("pages/18_Controle_Pneus.py", "Controle de Pneus", "🛞", False),
+    ("pages/20_Analise_Preditiva_Oleo.py", "Análise Óleo (Preditiva)", "🧪", False),
 
     # Operacional (4 PÁGINAS)
     ("pages/5_Nova_Ordem_Servico.py", "Nova O.S.", "📝", False),
@@ -226,12 +227,12 @@ if not lista_paginas_validas:
     st.error("Erro crítico: Nenhuma página encontrada. Verifique a pasta 'pages'.")
     st.stop()
 
-# Ajuste nos índices devido à nova página adicionada em Dashboards (agora corta no índice 9)
+# Ajuste nos índices devido à nova página adicionada em Dashboards (agora corta no índice 10)
 pg = st.navigation({
-    "Dashboards": lista_paginas_validas[:9],
-    "Operacional": lista_paginas_validas[9:13],
-    "Cadastros": lista_paginas_validas[13:17],
-    "Sistema": lista_paginas_validas[17:]
+    "Dashboards": lista_paginas_validas[:10],
+    "Operacional": lista_paginas_validas[10:14],
+    "Cadastros": lista_paginas_validas[14:18],
+    "Sistema": lista_paginas_validas[18:]
 })
 
 

@@ -5,10 +5,12 @@ import sys
 import os
 import re
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit.components.v1 as components
 from fpdf import FPDF
 import tempfile
 import sqlite3
+import io
 from datetime import datetime
 
 # --- BLINDAGEM E IMPORTAÇÃO DO BANCO DE DADOS ---
@@ -49,6 +51,30 @@ except ImportError:
     def get_db_connection():
         return sqlite3.connect("manutencao.db")
 
+# Tentativa segura de importar pacotes para Gráficos e Exportação Excel
+try:
+    import matplotlib
+
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import matplotlib.ticker as ticker
+    import matplotlib.patches as patches
+    import matplotlib.gridspec as gridspec
+    import matplotlib.dates as mdates
+
+    MATPLOTLIB_AVAILABLE = True
+except ImportError:
+    MATPLOTLIB_AVAILABLE = False
+
+try:
+    from openpyxl import Workbook
+    from openpyxl.drawing.image import Image as OpenpyxlImage
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+    OPENPYXL_AVAILABLE = True
+except ImportError:
+    OPENPYXL_AVAILABLE = False
+
 
 # ==============================================================================
 # INICIALIZAÇÃO DA TABELA DE HISTÓRICO (EVOLUÇÃO DIÁRIA)
@@ -72,7 +98,6 @@ def criar_tabelas_historico():
     conn.close()
 
 
-# Executa a verificação/criação ao abrir a página
 criar_tabelas_historico()
 
 
@@ -84,18 +109,6 @@ def carregar_historico_salvo():
         df_hist['data_registro'] = pd.to_datetime(df_hist['data_registro']).dt.date
     return df_hist
 
-
-# Tentativa segura de importar o matplotlib para gráficos na Capa do PDF
-try:
-    import matplotlib
-
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-    import matplotlib.ticker as ticker
-
-    MATPLOTLIB_AVAILABLE = True
-except ImportError:
-    MATPLOTLIB_AVAILABLE = False
 
 # --- CONFIGURAÇÃO INICIAL ---
 load_custom_css()
@@ -193,6 +206,7 @@ def gerar_html_croqui(df_equip):
             row = p_df.iloc[0]
             pos = row['Pos_Desc']
             fogo = str(row['Pneu_Fogo'])
+            # Escapar aspas para evitar quebra do HTML
             desc_html = str(row['Pneu_Desc']).replace("'", "&#39;").replace('"', '&quot;')
 
             tooltip = f"<div class='tooltip'><b>ID:</b> {fogo}<br><b>Pos:</b> {pos}<br><b>Desc:</b> {desc_html}</div>"
@@ -341,7 +355,7 @@ class CroquiPDF(FPDF):
 
 
 @st.cache_data(show_spinner="Desenhando capa e croquis vetoriais para o PDF...", ttl=600)
-def gerar_pdf_pneus_frota(df, orientacao_pdf='L', filtros=None):
+def gerar_pdf_pneus_frota(df, df_hist_pdf, orientacao_pdf='L', filtros=None):
     if filtros is None: filtros = {}
 
     pdf = CroquiPDF(orientacao=orientacao_pdf, unit='mm', format='A4')
@@ -352,7 +366,9 @@ def gerar_pdf_pneus_frota(df, orientacao_pdf='L', filtros=None):
     w_total = 277 if orientacao_pdf == 'L' else 190
     max_y_page = 190 if orientacao_pdf == 'L' else 277
 
-    # PÁGINA 1: CAPA (RESUMO EXECUTIVO DA FROTA)
+    # ==========================================
+    # PÁGINA 1: CAPA (RESUMO EXECUTIVO E GRÁFICOS)
+    # ==========================================
     pdf.set_font('Arial', 'B', 18)
     pdf.set_text_color(22, 102, 53)
     pdf.cell(0, 10, "Resumo Executivo da Frota", 0, 1, 'C')
@@ -361,7 +377,7 @@ def gerar_pdf_pneus_frota(df, orientacao_pdf='L', filtros=None):
     pdf.set_text_color(100, 116, 139)
     filtro_txt = f"Filtros: Status ({filtros.get('status', 'Todos')}) | Tipos ({filtros.get('tipo', 'Todos')}) | Fogo ({filtros.get('fogo', 'Nenhum')}) | Excluidas ({filtros.get('excluidas', 'Nenhuma')})"
     pdf.cell(0, 5, filtro_txt.encode('latin-1', 'replace').decode('latin-1'), 0, 1, 'C')
-    pdf.ln(8)
+    pdf.ln(6)
 
     total_equip = df['Equip_Cod'].nunique()
     frotas_falta = df[df['Status'] == 'Ausente']['Equip_Cod'].nunique()
@@ -391,7 +407,7 @@ def gerar_pdf_pneus_frota(df, orientacao_pdf='L', filtros=None):
     draw_kpi_card(10 + 2 * (w_card + 5), y_kpi, w_card, "PNEUS INSTALADOS", total_pneus, 16, 185, 129)
     draw_kpi_card(10 + 3 * (w_card + 5), y_kpi, w_card, "POSICOES VAZIAS", ausentes, 245, 158, 11)
 
-    pdf.set_y(y_kpi + 28)
+    pdf.set_y(y_kpi + 26)
 
     pdf.set_font('Arial', 'B', 10)
     pdf.set_text_color(30, 41, 59)
@@ -403,37 +419,85 @@ def gerar_pdf_pneus_frota(df, orientacao_pdf='L', filtros=None):
     texto_resumo = f"Este relatorio audita e detalha {total_equip} maquinas/implementos da operacao baseado no filtro selecionado. " \
                    f"Atualmente, a taxa de posicoes descalcadas e de {pct_faltas:.1f}% ({ausentes} pneus ausentes na base). " \
                    f"Registamos {frotas_falta} maquinas circulando com pendencia ou falha na montagem de borracha. " \
-                   f"Abaixo seguem os principais indicadores, e nas paginas seguintes a visao do croqui."
+                   f"Abaixo seguem os principais indicadores graficos da frota."
     pdf.multi_cell(0, 5, texto_resumo.encode('latin-1', 'replace').decode('latin-1'))
-    pdf.ln(6)
+    pdf.ln(4)
 
+    # ---------------- GRÁFICOS DINÂMICOS (MATPLOTLIB GRIDSPEC) ----------------
     if MATPLOTLIB_AVAILABLE and not df.empty:
-        fig_w = 10 if orientacao_pdf == 'L' else 7.5
-        fig_h = 3.8 if orientacao_pdf == 'L' else 3.5
-        fig, axes = plt.subplots(1, 2, figsize=(fig_w, fig_h))
+        if orientacao_pdf == 'L':
+            fig_w, fig_h = 11.5, 3.6
+            fig = plt.figure(figsize=(fig_w, fig_h))
+            gs = gridspec.GridSpec(1, 3, figure=fig, wspace=0.3)
+            ax1 = fig.add_subplot(gs[0, 0])
+            ax2 = fig.add_subplot(gs[0, 1])
+            ax3 = fig.add_subplot(gs[0, 2])
+        else:
+            fig_w, fig_h = 7.5, 5.5
+            fig = plt.figure(figsize=(fig_w, fig_h))
+            gs = gridspec.GridSpec(2, 2, figure=fig, hspace=0.5, wspace=0.3)
+            ax1 = fig.add_subplot(gs[0, 0])
+            ax2 = fig.add_subplot(gs[0, 1])
+            ax3 = fig.add_subplot(gs[1, :])
 
+        # Gráfico 1: Pizza (Saúde)
         s_counts = df['Status'].value_counts()
         colors = ['#10B981' if s == 'Instalado' else '#EF4444' for s in s_counts.index]
-        axes[0].pie(s_counts, labels=s_counts.index, autopct='%1.1f%%', colors=colors, startangle=90,
-                    wedgeprops={'width': 0.4, 'edgecolor': 'w'})
-        axes[0].set_title('Saude das Posicoes', fontsize=10, fontweight='bold', color='#333333')
+        ax1.pie(s_counts, labels=s_counts.index, autopct='%1.1f%%', colors=colors, startangle=90,
+                wedgeprops={'width': 0.4, 'edgecolor': 'w'}, textprops={'fontsize': 8})
+        ax1.set_title('Saude das Posicoes (%)', fontsize=10, fontweight='bold', color='#333333')
 
+        # Gráfico 2: Barras (Top Frotas)
         df_ausentes = df[df['Status'] == 'Ausente']
         if not df_ausentes.empty:
             top_ausentes = df_ausentes['Equip_Cod'].value_counts().head(5).sort_values(ascending=True)
-            axes[1].barh(top_ausentes.index.astype(str), top_ausentes.values, color='#EF4444')
-            axes[1].set_title('Frotas c/ Mais Ausencias (Top 5)', fontsize=10, fontweight='bold', color='#333333')
+            ax2.barh(top_ausentes.index.astype(str), top_ausentes.values, color='#EF4444')
+            ax2.set_title('Frotas c/ Mais Ausencias', fontsize=10, fontweight='bold', color='#333333')
         else:
             top_eq = df['Equip_Desc'].value_counts().head(5).sort_values(ascending=True)
-            axes[1].barh(top_eq.index.astype(str).str.slice(0, 15), top_eq.values, color='#3B82F6')
-            axes[1].set_title('Tipos de Frota Mapeados (Top 5)', fontsize=10, fontweight='bold', color='#333333')
+            ax2.barh(top_eq.index.astype(str).str.slice(0, 15), top_eq.values, color='#3B82F6')
+            ax2.set_title('Tipos de Frota (Top 5)', fontsize=10, fontweight='bold', color='#333333')
 
-        axes[1].xaxis.set_major_locator(ticker.MaxNLocator(integer=True))
-        axes[1].spines['top'].set_visible(False)
-        axes[1].spines['right'].set_visible(False)
-        axes[1].spines['bottom'].set_color('#CCCCCC')
-        axes[1].spines['left'].set_color('#CCCCCC')
-        axes[1].tick_params(axis='both', labelsize=8, colors='#555555')
+        ax2.xaxis.set_major_locator(ticker.MaxNLocator(integer=True))
+        ax2.spines['top'].set_visible(False)
+        ax2.spines['right'].set_visible(False)
+        ax2.spines['bottom'].set_color('#CCCCCC')
+        ax2.spines['left'].set_color('#CCCCCC')
+        ax2.tick_params(axis='both', labelsize=8, colors='#555555')
+
+        # Gráfico 3: Evolução Histórica (Linha e Área)
+        if not df_hist_pdf.empty:
+            df_hist_global = df_hist_pdf.groupby('data_registro').agg(
+                Total_Pos=('total_pos', 'sum'),
+                Total_Instalados=('instalados', 'sum')
+            ).reset_index()
+            df_hist_global['Saude_Global_Pct'] = (df_hist_global['Total_Instalados'] / df_hist_global[
+                'Total_Pos']) * 100
+
+            ax3.plot(df_hist_global['data_registro'], df_hist_global['Saude_Global_Pct'], marker='o', color='#10B981',
+                     linewidth=2.5, markersize=5)
+            ax3.fill_between(df_hist_global['data_registro'], df_hist_global['Saude_Global_Pct'], color='#10B981',
+                             alpha=0.2)
+            ax3.set_title('Curva de Evolucao da Saude (%)', fontsize=10, fontweight='bold', color='#333333')
+            ax3.set_ylim([0, 105])
+            ax3.grid(True, linestyle='--', alpha=0.4)
+            ax3.spines['top'].set_visible(False)
+            ax3.spines['right'].set_visible(False)
+            ax3.spines['left'].set_color('#CCCCCC')
+            ax3.spines['bottom'].set_color('#CCCCCC')
+            ax3.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m'))
+            ax3.tick_params(axis='x', labelsize=7, rotation=30, colors='#555555')
+            ax3.tick_params(axis='y', labelsize=8, colors='#555555')
+
+            # Adiciona rótulos de dados na linha
+            for x, y in zip(df_hist_global['data_registro'], df_hist_global['Saude_Global_Pct']):
+                ax3.text(x, y + 2, f'{y:.1f}%', ha='center', va='bottom', fontsize=6, color='#065F46',
+                         fontweight='bold')
+        else:
+            ax3.text(0.5, 0.5, 'Nenhum Historico\nGravado Diariamente', ha='center', va='center', color='#999999',
+                     fontsize=9)
+            ax3.axis('off')
+            ax3.set_title('Curva de Evolucao da Saude (%)', fontsize=10, fontweight='bold', color='#333333')
 
         plt.tight_layout()
         img_path = tempfile.mktemp(suffix=".png")
@@ -441,13 +505,15 @@ def gerar_pdf_pneus_frota(df, orientacao_pdf='L', filtros=None):
         fig.savefig(img_path, dpi=200, bbox_inches='tight')
         plt.close(fig)
 
-        img_width = 240 if orientacao_pdf == 'L' else 170
+        img_width = 265 if orientacao_pdf == 'L' else 180
         img_x = (w_total + 20 - img_width) / 2
         pdf.image(img_path, x=img_x, y=pdf.get_y(), w=img_width)
 
     pdf.add_page()
 
+    # ==========================================
     # PÁGINAS SEGUINTES: CROQUIS VETORIAIS
+    # ==========================================
     frotas = df['Equip_Cod'].unique()
 
     for frota in frotas:
@@ -628,7 +694,7 @@ def gerar_pdf_pneus_frota(df, orientacao_pdf='L', filtros=None):
         pdf.line(10, next_y - 2, w_total + 10, next_y - 2)
 
     # ==============================================================================
-    # PÁGINA FINAL: SCORE DE SAÚDE DA FROTA (NOVA FUNCIONALIDADE)
+    # PÁGINA FINAL: SCORE DE SAÚDE DA FROTA
     # ==============================================================================
     pdf.add_page()
     pdf.set_font('Arial', 'B', 16)
@@ -709,7 +775,6 @@ def gerar_pdf_pneus_frota(df, orientacao_pdf='L', filtros=None):
         pdf.cell(w_h[5], 6, f"{row['Percentual']:.1f}%", 'B', 1, 'C', fill=fill)
         fill = not fill
 
-    # Salvamento do arquivo
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
     pdf_path = tmp.name
     tmp.close()
@@ -729,8 +794,195 @@ def gerar_pdf_pneus_frota(df, orientacao_pdf='L', filtros=None):
 
 
 # ==============================================================================
-# INTERFACE PRINCIPAL
+# MOTOR DE RENDERIZAÇÃO DO ESPELHO EXCEL (COM IMAGENS)
 # ==============================================================================
+@st.cache_data(show_spinner="Gerando espelho em Excel com Imagens e Tabelas...", ttl=600)
+def gerar_excel_pneus_frota(df_view, df_health):
+    if not OPENPYXL_AVAILABLE:
+        return None
+
+    wb = Workbook()
+
+    # --- ABA 1: CADERNO DE CROQUIS ---
+    ws_croqui = wb.active
+    ws_croqui.title = "Caderno de Croquis"
+    ws_croqui.sheet_view.showGridLines = False
+
+    header_fill = PatternFill(start_color="166534", end_color="166534", fill_type="solid")
+    header_font = Font(color="FFFFFF", bold=True)
+    border_thin = Border(left=Side(style='thin', color="CCCCCC"),
+                         right=Side(style='thin', color="CCCCCC"),
+                         top=Side(style='thin', color="CCCCCC"),
+                         bottom=Side(style='thin', color="CCCCCC"))
+    align_center = Alignment(horizontal="center", vertical="center")
+    align_left = Alignment(horizontal="left", vertical="center")
+
+    # Configurações de coluna
+    ws_croqui.column_dimensions['A'].width = 2
+    ws_croqui.column_dimensions['F'].width = 10
+    ws_croqui.column_dimensions['G'].width = 15
+    ws_croqui.column_dimensions['H'].width = 20
+    ws_croqui.column_dimensions['I'].width = 15
+    ws_croqui.column_dimensions['J'].width = 50
+
+    frotas = df_view['Equip_Cod'].unique()
+    current_row = 2
+
+    for frota in frotas:
+        df_f = df_view[df_view['Equip_Cod'] == frota].copy()
+        nome_equip = df_f.iloc[0]['Equip_Desc']
+        max_eixo = df_f['Eixo'].max()
+
+        cell_title = ws_croqui.cell(row=current_row, column=2, value=f"{nome_equip} (Cód: {frota})")
+        cell_title.font = Font(size=14, bold=True, color="1E293B")
+        current_row += 2
+
+        if MATPLOTLIB_AVAILABLE:
+            fig_h = max(2.5, max_eixo * 1.2)
+            fig, ax = plt.subplots(figsize=(3.5, fig_h))
+            ax.set_xlim(-3, 3)
+            ax.set_ylim(max_eixo + 0.5, 0.5)
+            ax.axis('off')
+
+            ax.plot([0, 0], [0.8, max_eixo + 0.2], color='#94A3B8', lw=6)
+            ax.text(0, 0.3, "⬆ FRENTE ⬆", ha='center', va='center', fontsize=8, color='#475569', weight='bold',
+                    bbox=dict(facecolor='#E2E8F0', edgecolor='none', boxstyle='round,pad=0.4'))
+
+            tire_w, tire_h = 0.9, 0.7
+            for eixo in range(1, max_eixo + 1):
+                df_e = df_f[df_f['Eixo'] == eixo]
+
+                ax.plot([-1.8, 1.8], [eixo, eixo], color='#475569', lw=4)
+                ax.text(0, eixo, f"EIXO {eixo}", ha='center', va='center', fontsize=7, color='white', weight='bold',
+                        bbox=dict(facecolor='#475569', edgecolor='none', boxstyle='round,pad=0.2'))
+
+                for _, row in df_e.iterrows():
+                    pos_type = row['Slot_Visual']
+                    if pos_type == 'LO':
+                        cx = -2.1
+                    elif pos_type == 'LI':
+                        cx = -1.0
+                    elif pos_type == 'RI':
+                        cx = 1.0
+                    elif pos_type == 'RO':
+                        cx = 2.1
+                    else:
+                        continue
+
+                    status = row['Status']
+                    if status == 'Ausente':
+                        facecolor, edgecolor, text_color, fogo_str, ls = '#FEF2F2', '#EF4444', '#991B1B', 'FALTA', '--'
+                    else:
+                        facecolor, edgecolor, text_color, ls = '#1E293B', '#0F172A', '#F8FAFC', '-'
+                        fogo_str = str(row['Pneu_Fogo'])[:8].replace('nan', 'S/FOGO')
+
+                    rect = patches.Rectangle((cx - tire_w / 2, eixo - tire_h / 2), tire_w, tire_h, linewidth=2,
+                                             linestyle=ls, edgecolor=edgecolor, facecolor=facecolor, zorder=3)
+                    ax.add_patch(rect)
+
+                    pos_str = str(row['Pos_Desc'])[:5]
+                    color_pos = '#94A3B8' if status != 'Ausente' else '#EF4444'
+                    ax.text(cx, eixo - 0.15, pos_str, ha='center', va='center', fontsize=7, color=color_pos, zorder=4,
+                            weight='bold')
+                    ax.text(cx, eixo + 0.15, fogo_str, ha='center', va='center', fontsize=6.5, color=text_color,
+                            zorder=4, weight='bold')
+
+            plt.tight_layout()
+            img_buf = io.BytesIO()
+            plt.savefig(img_buf, format='png', dpi=120, bbox_inches='tight', transparent=True)
+            plt.close(fig)
+
+            img_buf.seek(0)
+            img = OpenpyxlImage(img_buf)
+            ws_croqui.add_image(img, f"B{current_row}")
+
+        headers = ["Pos.", "Local", "Num Fogo", "Situação", "Descrição do Pneu"]
+        for idx, h in enumerate(headers):
+            cell = ws_croqui.cell(row=current_row, column=6 + idx, value=h)
+            cell.fill = header_fill;
+            cell.font = header_font;
+            cell.border = border_thin;
+            cell.alignment = align_center
+
+        row_idx = current_row + 1
+        for _, r in df_f.iterrows():
+            ws_croqui.cell(row=row_idx, column=6, value=str(r['Pos_Cod'])[:8].strip()).alignment = align_center
+            ws_croqui.cell(row=row_idx, column=6).border = border_thin
+
+            ws_croqui.cell(row=row_idx, column=7, value=str(r['Pos_Desc'])[:10].strip()).alignment = align_center
+            ws_croqui.cell(row=row_idx, column=7).border = border_thin
+
+            ws_croqui.cell(row=row_idx, column=8, value=str(r['Pneu_Fogo'])[:15].strip()).alignment = align_center
+            ws_croqui.cell(row=row_idx, column=8).border = border_thin
+
+            c_stat = ws_croqui.cell(row=row_idx, column=9, value=str(r['Status']).upper()[:10])
+            c_stat.alignment = align_center;
+            c_stat.border = border_thin
+            c_stat.font = Font(color="EF4444", bold=True) if r['Status'] == 'Ausente' else Font(color="16A34A",
+                                                                                                bold=True)
+
+            desc = str(r['Pneu_Desc']).replace('nan', 'SEM INFO').strip()
+            ws_croqui.cell(row=row_idx, column=10, value=desc).alignment = align_left
+            ws_croqui.cell(row=row_idx, column=10).border = border_thin
+
+            row_idx += 1
+
+        linhas_img = int((max_eixo * 1.2 * 120) / 20) + 4
+        linhas_tab = len(df_f) + 2
+        current_row += max(linhas_img, linhas_tab) + 4
+
+    # --- ABA 2: SCORE DE SAÚDE (Consolidado) ---
+    ws_health = wb.create_sheet(title="Score de Saúde")
+
+    h_headers = ["Máquina", "Descrição", "Posições", "Instalados", "Faltas", "% Calçado"]
+    for col_idx, h in enumerate(h_headers, start=1):
+        c = ws_health.cell(row=1, column=col_idx, value=h)
+        c.fill = header_fill;
+        c.font = header_font;
+        c.border = border_thin;
+        c.alignment = align_center
+
+    row_idx = 2
+    for _, r in df_health.iterrows():
+        ws_health.cell(row=row_idx, column=1, value=str(r['Equip_Cod'])).border = border_thin
+        ws_health.cell(row=row_idx, column=2, value=str(r['Equip_Desc'])).border = border_thin
+        ws_health.cell(row=row_idx, column=3, value=r['Total_Pos']).border = border_thin
+        ws_health.cell(row=row_idx, column=4, value=r['Instalados']).border = border_thin
+
+        c_faltas = ws_health.cell(row=row_idx, column=5, value=r['Faltas'])
+        c_faltas.border = border_thin
+        if r['Faltas'] > 0: c_faltas.font = Font(color="EF4444", bold=True)
+
+        c_pct = ws_health.cell(row=row_idx, column=6, value=f"{r['Percentual']:.1f}%")
+        c_pct.border = border_thin
+        if r['Percentual'] == 100:
+            c_pct.font = Font(color="16A34A", bold=True)
+        elif r['Percentual'] >= 70:
+            c_pct.font = Font(color="A16207", bold=True)
+        else:
+            c_pct.font = Font(color="EF4444", bold=True)
+
+        row_idx += 1
+
+    ws_health.column_dimensions['A'].width = 15
+    ws_health.column_dimensions['B'].width = 40
+    ws_health.column_dimensions['C'].width = 12
+    ws_health.column_dimensions['D'].width = 12
+    ws_health.column_dimensions['E'].width = 10
+    ws_health.column_dimensions['F'].width = 12
+
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return output.getvalue()
+
+
+# ==============================================================================
+# INTERFACE PRINCIPAL E GERAÇÃO WHATSAPP
+# ==============================================================================
+
+# Busca o Histórico de forma global para usar tanto no PDF quanto na Web
+df_historico_global = carregar_historico_salvo()
 
 if 'dataset_pneus' not in st.session_state:
     st.session_state['dataset_pneus'] = None
@@ -782,7 +1034,6 @@ with st.sidebar:
     st.markdown("##### 💾 Histórico Diário")
     st.caption("Salve o status global para acompanhar a evolução na aba de Histórico.")
     if st.button("Gravar Posição do Dia", use_container_width=True, type="primary"):
-        # Recalcula a saúde para a frota completa (ignorando os filtros laterais)
         df_health_total = df.groupby(['Equip_Cod', 'Equip_Desc']).agg(
             Total_Pos=('Pos_Cod', 'count'),
             Instalados=('Status', lambda x: (x == 'Instalado').sum())
@@ -795,7 +1046,6 @@ with st.sidebar:
         cursor = conn.cursor()
         data_atual = datetime.now().date()
 
-        # Apaga o registro de hoje se já existir para não duplicar (mantém o snapshot mais recente do dia)
         cursor.execute("DELETE FROM historico_saude_pneus WHERE data_registro = ?", (data_atual,))
 
         for _, row in df_health_total.iterrows():
@@ -808,7 +1058,6 @@ with st.sidebar:
         conn.commit()
         conn.close()
         st.toast("Posição do dia salva no Histórico!", icon="✅")
-        # Usa um pequeno delay para o toast aparecer antes de recarregar
         import time;
 
         time.sleep(1);
@@ -857,7 +1106,6 @@ st.markdown("<br>", unsafe_allow_html=True)
 # ALERTAS GLOBAIS (VALIDAÇÃO DE ANOMALIAS E FALTAS)
 # ==============================================================================
 
-# Validador de Anomalias (Pneus Clonados)
 df_valid_tires = df_view[~df_view['Pneu_Fogo'].isin(['S/ FOGO', 'FALTA', ''])]
 duplicados = df_valid_tires.groupby('Pneu_Fogo')['Equip_Cod'].nunique()
 pneus_clonados = duplicados[duplicados > 1].index.tolist()
@@ -880,7 +1128,6 @@ if pneus_clonados:
             hide_index=True, use_container_width=True
         )
 
-# Alerta de Frotas com Pneus Ausentes
 df_alertas = df_view[df_view['Status'] == 'Ausente']
 if not df_alertas.empty:
     frotas_alerta = df_alertas['Equip_Cod'].unique()
@@ -894,14 +1141,55 @@ else:
 
 st.markdown("<br>", unsafe_allow_html=True)
 
+
 # ==============================================================================
 # ABAS DA INTERFACE PRINCIPAL
 # ==============================================================================
+
+@st.dialog("📱 Resumo para WhatsApp")
+def gerar_resumo_whatsapp(df_v, t_equip, t_pneus, t_ausentes):
+    hoje = datetime.now().strftime('%d/%m/%Y')
+    saude_pct = (t_pneus / (t_pneus + t_ausentes) * 100) if (t_pneus + t_ausentes) > 0 else 100
+
+    texto = f"🚜 *STATUS DA BORRACHARIA - {hoje}* 🚜\n\n"
+    texto += f"📊 *RESUMO GERAL*\n"
+    texto += f"▫️ Frotas Auditadas: {t_equip}\n"
+    texto += f"▫️ Pneus Rodando: {t_pneus}\n"
+    texto += f"▫️ Posições Vazias: {t_ausentes}\n"
+    texto += f"▫️ Saúde da Frota: {saude_pct:.1f}%\n\n"
+
+    if t_ausentes > 0:
+        texto += f"🚨 *FROTAS CRÍTICAS (PNEU AUSENTE)* 🚨\n"
+        df_ausentes = df_v[df_v['Status'] == 'Ausente']
+        contagem_faltas = df_ausentes['Equip_Cod'].value_counts()
+
+        for f, qtd in contagem_faltas.head(10).items():
+            desc = df_v[df_v['Equip_Cod'] == f].iloc[0]['Equip_Desc']
+            plural = "s" if qtd > 1 else ""
+            texto += f"🔹 {f} - {desc} ({qtd} pneu{plural} faltante{plural})\n"
+
+        if len(contagem_faltas) > 10:
+            texto += f"*(+ {len(contagem_faltas) - 10} outras frotas...)*\n"
+    else:
+        texto += f"✅ *FROTA 100% CALÇADA* - Nenhuma pendência!\n"
+
+    texto += "\nGerado pelo *Sistema Cedro*"
+
+    st.info("Pressione o ícone de copiar no canto superior direito do bloco abaixo e cole no seu WhatsApp:")
+    st.code(texto, language="markdown")
+
+
 tab_dash, tab_croqui, tab_saude, tab_evolucao = st.tabs(
     ["📈 Dashboard Executivo", "🔍 Inspeção Visual (Croqui)", "💯 Saúde da Frota", "📉 Evolução Histórica"])
 
 with tab_dash:
-    st.markdown("##### Visão Geral da Frota Filtrada")
+    col_titulo_dash, col_btn_zap = st.columns([3, 1])
+    with col_titulo_dash:
+        st.markdown("##### Visão Geral da Frota Filtrada")
+    with col_btn_zap:
+        if st.button("💬 Resumo p/ WhatsApp", use_container_width=True):
+            gerar_resumo_whatsapp(df_view, total_equip, total_pneus, ausentes)
+
     if not df_view.empty:
         c_dash1, c_dash2 = st.columns([1, 1.5])
 
@@ -1025,17 +1313,14 @@ with tab_saude:
         st.info("Nenhuma frota disponível para gerar o Score de Saúde.")
 
 with tab_evolucao:
-    st.markdown("##### 📈 Evolução Histórica (Linha do Tempo)")
-    st.caption("Acompanhe como a saúde e o número de faltas progridem dia a dia.")
+    st.markdown("##### 📈 Panorama Global da Frota (Evolução Diária)")
+    st.caption("Acompanhe o impacto da quantidade de pneus ausentes em relação à saúde global da frota.")
 
-    df_historico = carregar_historico_salvo()
-
-    if df_historico.empty:
+    if df_historico_global.empty:
         st.info(
             "Nenhum histórico gravado ainda. Utilize o botão 'Gravar Posição do Dia' na barra lateral para iniciar o seu histórico.")
     else:
-        # Agrupamento Global (Todos os dados gravados por dia)
-        df_hist_global = df_historico.groupby('data_registro').agg(
+        df_hist_global = df_historico_global.groupby('data_registro').agg(
             Total_Pos=('total_pos', 'sum'),
             Total_Instalados=('instalados', 'sum'),
             Total_Faltas=('ausentes', 'sum')
@@ -1043,29 +1328,59 @@ with tab_evolucao:
 
         df_hist_global['Saude_Global_Pct'] = (df_hist_global['Total_Instalados'] / df_hist_global['Total_Pos']) * 100
 
-        c_evo1, c_evo2 = st.columns(2)
-        with c_evo1:
-            fig_saude_evo = px.line(df_hist_global, x='data_registro', y='Saude_Global_Pct', markers=True,
-                                    title="Evolução da Saúde Global da Frota (%)", color_discrete_sequence=['#10B981'])
-            fig_saude_evo.update_layout(yaxis_title="% Calçado", xaxis_title="Data do Registro", yaxis_range=[0, 105],
-                                        margin=dict(t=40, b=10, l=10, r=10))
-            st.plotly_chart(fig_saude_evo, use_container_width=True)
+        # --- GRÁFICO DUAL-AXIS (LINHA + BARRAS) ULTRA MODERNO ---
+        fig_combo = go.Figure()
 
-        with c_evo2:
-            fig_faltas_evo = px.line(df_hist_global, x='data_registro', y='Total_Faltas', markers=True,
-                                     title="Curva de Faltas (Pneus Ausentes)", color_discrete_sequence=['#EF4444'])
-            fig_faltas_evo.update_layout(yaxis_title="Total de Faltas", xaxis_title="Data do Registro",
-                                         yaxis={'rangemode': 'tozero'}, margin=dict(t=40, b=10, l=10, r=10))
-            st.plotly_chart(fig_faltas_evo, use_container_width=True)
+        # Barras de faltas mais sutis e bonitas
+        fig_combo.add_trace(go.Bar(
+            x=df_hist_global['data_registro'],
+            y=df_hist_global['Total_Faltas'],
+            name="Pneus Ausentes",
+            marker=dict(color='#EF4444', line=dict(color='#B91C1C', width=1), opacity=0.4),
+            yaxis='y2',
+            hovertemplate="Data: %{x}<br>Ausentes: %{y}<extra></extra>"
+        ))
+
+        # Linha de Saúde Global com curva suave (spline) e gradiente
+        fig_combo.add_trace(go.Scatter(
+            x=df_hist_global['data_registro'],
+            y=df_hist_global['Saude_Global_Pct'],
+            name="Saúde Global (%)",
+            mode='lines+markers+text',
+            text=[f"{v:.1f}%" for v in df_hist_global['Saude_Global_Pct']],
+            textposition="top center",
+            textfont=dict(color='#065F46', size=10),
+            line=dict(color='#10B981', width=4, shape='spline'),
+            marker=dict(size=8, color='#059669', line=dict(width=2, color='white')),
+            fill='tozeroy',
+            fillcolor='rgba(16, 185, 129, 0.2)',
+            hovertemplate="Data: %{x}<br>Saúde: %{y:.1f}%<extra></extra>"
+        ))
+
+        fig_combo.update_layout(
+            title=dict(text="📈 Evolução da Saúde vs. Volumetria de Pneus Faltantes",
+                       font=dict(size=18, color='#1E293B')),
+            yaxis=dict(title=dict(text="Saúde Global (%)", font=dict(color="#10B981")), range=[0, 110],
+                       tickfont=dict(color="#10B981"), gridcolor='rgba(0,0,0,0.05)'),
+            yaxis2=dict(title=dict(text="Qtd Pneus Ausentes", font=dict(color="#EF4444")), overlaying='y', side='right',
+                        tickfont=dict(color="#EF4444"), showgrid=False),
+            legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5,
+                        bgcolor='rgba(255,255,255,0.8)'),
+            margin=dict(t=50, b=10, l=10, r=10),
+            hovermode="x unified",
+            plot_bgcolor='white',
+            paper_bgcolor='rgba(0,0,0,0)'
+        )
+        st.plotly_chart(fig_combo, use_container_width=True)
 
         st.markdown("---")
         st.markdown("###### 🔍 Rastreio Específico por Máquina")
-        maquinas_historicas = sorted(df_historico['equip_cod'].unique().tolist())
+        maquinas_historicas = sorted(df_historico_global['equip_cod'].unique().tolist())
         maq_selecionadas = st.multiselect("Selecione até 5 máquinas para comparar a evolução de saúde lado a lado:",
                                           options=maquinas_historicas, max_selections=5)
 
         if maq_selecionadas:
-            df_hist_maq = df_historico[df_historico['equip_cod'].isin(maq_selecionadas)]
+            df_hist_maq = df_historico_global[df_historico_global['equip_cod'].isin(maq_selecionadas)]
             fig_maq_evo = px.line(df_hist_maq, x='data_registro', y='percentual', color='equip_cod', markers=True,
                                   title="Comparativo de Saúde (%) por Máquina")
             fig_maq_evo.update_layout(yaxis_title="% Calçado", xaxis_title="Data do Registro", yaxis_range=[0, 105],
@@ -1073,12 +1388,11 @@ with tab_evolucao:
             st.plotly_chart(fig_maq_evo, use_container_width=True)
 
 # ==============================================================================
-# EXPORTAÇÃO OFICIAL DO RELATÓRIO (PDF E VETORIAL LADO A LADO)
+# EXPORTAÇÃO OFICIAL DO RELATÓRIO
 # ==============================================================================
 st.markdown("---")
 st.markdown("### 🖨️ Caderno de Croquis (Relatório Oficial)")
-st.caption(
-    "Exporte o relatório consolidado em PDF respeitando os filtros aplicados na barra lateral. Ideal para imprimir somente as frotas com divergências.")
+st.caption("Exporte o relatório consolidado em PDF ou Excel respeitando os filtros aplicados na barra lateral.")
 
 orientacao_ui = st.radio("Orientação do PDF:", ["Retrato (Em pé)", "Paisagem (Deitado)"], horizontal=True)
 orientacao_escolhida = 'P' if 'Retrato' in orientacao_ui else 'L'
@@ -1086,19 +1400,52 @@ orientacao_escolhida = 'P' if 'Retrato' in orientacao_ui else 'L'
 if df_view.empty:
     st.info("Ajuste os filtros para visualizar e exportar o relatório.")
 else:
-    with st.spinner("Desenhando vetores e calculando dimensões de página..."):
+    with st.spinner("Desenhando vetores e gerando ficheiros para download..."):
         filtros_aplicados = {
             'status': filtro_status_frota,
             'tipo': ", ".join(filtro_tipo) if filtro_tipo else "Todos os Tipos",
             'fogo': busca_fogo if busca_fogo else "Nenhum",
             'excluidas': ", ".join(filtro_excluir_frota) if filtro_excluir_frota else "Nenhuma"
         }
-        pdf_oficial = gerar_pdf_pneus_frota(df_view, orientacao_pdf=orientacao_escolhida, filtros=filtros_aplicados)
 
-    st.download_button(
-        label=f"📄 Descarregar PDF ({total_equip} frotas listadas)",
-        data=pdf_oficial,
-        file_name=f"Caderno_Pneus_Compacto_{datetime.now().strftime('%d%m%Y')}.pdf",
-        mime="application/pdf",
-        type="primary"
-    )
+        # Gerar PDF (Passando também o DataFrame do Histórico Global para a Capa)
+        pdf_oficial = gerar_pdf_pneus_frota(df_view, df_historico_global, orientacao_pdf=orientacao_escolhida,
+                                            filtros=filtros_aplicados)
+
+        # O DataFrame de Saúde global do filtro para exportar no Excel
+        df_health_export = df_view.groupby(['Equip_Cod', 'Equip_Desc']).agg(
+            Total_Pos=('Pos_Cod', 'count'),
+            Instalados=('Status', lambda x: (x == 'Instalado').sum())
+        ).reset_index()
+        df_health_export['Percentual'] = (df_health_export['Instalados'] / df_health_export['Total_Pos']) * 100
+        df_health_export['Faltas'] = df_health_export['Total_Pos'] - df_health_export['Instalados']
+        df_health_export = df_health_export.sort_values(by=['Percentual', 'Faltas'], ascending=[True, False])
+
+        # Gerar Excel
+        excel_oficial = gerar_excel_pneus_frota(df_view, df_health_export)
+
+    # Botões de Download Lado a Lado
+    c_btn_pdf, c_btn_xl = st.columns(2)
+
+    with c_btn_pdf:
+        st.download_button(
+            label=f"📄 Descarregar PDF ({total_equip} frotas listadas)",
+            data=pdf_oficial,
+            file_name=f"Caderno_Pneus_Compacto_{datetime.now().strftime('%d%m%Y')}.pdf",
+            mime="application/pdf",
+            type="primary",
+            use_container_width=True
+        )
+
+    with c_btn_xl:
+        if excel_oficial:
+            st.download_button(
+                label=f"📊 Descarregar Espelho Excel (Croquis + Tabela)",
+                data=excel_oficial,
+                file_name=f"Espelho_Pneus_{datetime.now().strftime('%d%m%Y')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary",
+                use_container_width=True
+            )
+        elif not OPENPYXL_AVAILABLE:
+            st.error("A biblioteca 'openpyxl' não está instalada no servidor.")

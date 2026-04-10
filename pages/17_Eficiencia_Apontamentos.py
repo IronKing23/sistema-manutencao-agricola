@@ -44,10 +44,9 @@ ui_header(
 FOTOS_DIR = "fotos_funcionarios"
 
 
-def get_foto_base64(matricula_ou_nome):
-    """Gera um data URI base64 para a foto do colaborador ou gestor"""
-    # Tenta por matricula ou nome exato
-    caminho = os.path.join(FOTOS_DIR, f"{str(matricula_ou_nome).strip()}.jpg")
+def get_foto_base64(matricula):
+    """Gera um data URI base64 para a foto do colaborador exibir na tela do Streamlit"""
+    caminho = os.path.join(FOTOS_DIR, f"{str(matricula).strip()}.jpg")
     if os.path.exists(caminho):
         try:
             with open(caminho, "rb") as f:
@@ -56,6 +55,21 @@ def get_foto_base64(matricula_ou_nome):
         except:
             pass
     return "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
+
+
+def get_sector_icon(setor_name):
+    """Retorna um emoji temático baseado no nome do setor."""
+    s = str(setor_name).upper()
+    if "BORRACHARIA" in s or "PNEU" in s: return "🛞"
+    if "ELETRICA" in s or "ELÉTRICA" in s: return "⚡"
+    if "MECANICA" in s or "MECÂNICA" in s: return "🔧"
+    if "LUBRIFICA" in s or "COMBOIO" in s: return "🛢️"
+    if "LAVA" in s or "LAVADOR" in s: return "🚿"
+    if "SOLDA" in s or "CALDEIRARIA" in s: return "🔥"
+    if "AUTOMOTIVA" in s or "FROTA" in s: return "🚜"
+    if "OFICINA" in s: return "🏭"
+    if "ADMIN" in s or "CONTROLE" in s: return "💻"
+    return "🏢"
 
 
 # ==============================================================================
@@ -93,24 +107,21 @@ class RelatorioPDF(FPDF):
         self.set_y(-15)
         self.set_font('Arial', 'I', 8)
         self.set_text_color(150, 150, 150)
-
         self.set_draw_color(220, 220, 220)
         self.line(10, self.get_y() - 2, 10 + self.largura_util, self.get_y() - 2)
 
         data_hora_atual = datetime.now().strftime('%d/%m/%Y %H:%M')
         texto_rodape = f'Emitido automaticamente via Sistema Cedro em: {data_hora_atual}  |  Pagina {self.page_no()}'
         texto_rodape = texto_rodape.encode('latin-1', 'replace').decode('latin-1')
-
         self.cell(0, 10, texto_rodape, 0, 0, 'C')
 
 
 @st.cache_data(show_spinner="Compilando relatórios PDF/Excel Avançados...", ttl=600)
-def processar_e_gerar_relatorios_eficiencia(df_view, df_improd_global, dt_in, dt_out, df_espelho, orientacao_pdf='L',
-                                            criterio_ranking="Engajamento (Horas Válidas)"):
+def processar_e_gerar_relatorios_eficiencia(df_view, df_improd_global, dt_in, dt_out, df_espelho, df_ref_dados,
+                                            orientacao_pdf='L', criterio_ranking="Engajamento (Horas Válidas)"):
     excel_io = io.BytesIO()
     arquivos_temporarios = []
 
-    # Variáveis Geométricas Dinâmicas
     w_total = 277 if orientacao_pdf == 'L' else 190
     max_y_page = 185 if orientacao_pdf == 'L' else 275
 
@@ -127,20 +138,19 @@ def processar_e_gerar_relatorios_eficiencia(df_view, df_improd_global, dt_in, dt
     perc_produtivo = min((h_prod / h_apont * 100) if h_apont > 0 else 0, 100)
 
     df_criticos = df_view[df_view['STATUS'].str.contains('Sem Apontamento|Ponto Não Batido', na=False)]
-    df_sem_ref = df_view[df_view['STATUS'] == 'ALERTA (Sem Refeição)']
+    df_sem_ref = df_ref_dados[df_ref_dados['STATUS'] == 'ALERTA (Sem Refeição)']
     fantasmas = df_criticos['NOME_FINAL'].nunique()
 
     # --- HELPER: SISTEMA DE AVATARES CIRCULARES ---
     avatar_cache = {}
 
-    def get_circular_avatar(identificador, bg_color):
-        cache_key = f"{identificador}_{bg_color}"
-        if cache_key in avatar_cache:
-            return avatar_cache[cache_key]
+    def get_circular_avatar(matricula, bg_color):
+        cache_key = f"{matricula}_{bg_color}"
+        if cache_key in avatar_cache: return avatar_cache[cache_key]
 
-        foto_path = os.path.join(FOTOS_DIR, f"{str(identificador).strip()}.jpg")
+        foto_path = os.path.join(FOTOS_DIR, f"{str(matricula).strip()}.jpg")
         if not os.path.exists(foto_path):
-            avatar_cache[cache_key] = None
+            avatar_cache[cache_key] = None;
             return None
 
         try:
@@ -150,12 +160,10 @@ def processar_e_gerar_relatorios_eficiencia(df_view, df_improd_global, dt_in, dt
             min_dim = min(iw, ih)
             img = img.crop(((iw - min_dim) // 2, (ih - min_dim) // 2, (iw + min_dim) // 2, (ih + min_dim) // 2))
 
-            hr_size = 150
+            hr_size = 120
             img = img.resize((hr_size, hr_size), Image.LANCZOS)
-
             bg = Image.new('RGB', (hr_size, hr_size), bg_color)
             draw = ImageDraw.Draw(bg)
-
             draw.ellipse((0, 0, hr_size, hr_size), fill=(226, 232, 240))
 
             mask = Image.new('L', (hr_size, hr_size), 0)
@@ -164,17 +172,15 @@ def processar_e_gerar_relatorios_eficiencia(df_view, df_improd_global, dt_in, dt
             mask_draw.ellipse((b_w, b_w, hr_size - b_w, hr_size - b_w), fill=255)
 
             bg.paste(img, (0, 0), mask)
-
             temp = tempfile.NamedTemporaryFile(delete=False, suffix='.jpg')
             bg.save(temp.name, 'JPEG', quality=95)
             arquivos_temporarios.append(temp.name)
             avatar_cache[cache_key] = temp.name
             return temp.name
         except Exception:
-            avatar_cache[cache_key] = None
+            avatar_cache[cache_key] = None;
             return None
 
-    # Passa a orientação para a inicialização do PDF
     titulo_rel = "Relatorio Auditoria de Produtividade (Paisagem)" if orientacao_pdf == 'L' else "Relatorio Auditoria de Produtividade (Retrato)"
     pdf = RelatorioPDF(titulo_relatorio=f"{titulo_rel}, Cedro", orientacao=orientacao_pdf)
     pdf.set_margins(10, 10, 10)
@@ -194,7 +200,6 @@ def processar_e_gerar_relatorios_eficiencia(df_view, df_improd_global, dt_in, dt
 
     y_kpi = pdf.get_y()
     largura_card = (w_total - 15) / 4
-
     fnt_kpi_t = 8 if orientacao_pdf == 'L' else 6
     fnt_kpi_v = 14 if orientacao_pdf == 'L' else 10
 
@@ -204,44 +209,44 @@ def processar_e_gerar_relatorios_eficiencia(df_view, df_improd_global, dt_in, dt
     pdf.set_draw_color(226, 232, 240)
     pdf.rect(pos_x1, y_kpi, largura_card, 22, 'DF')
     pdf.set_xy(pos_x1, y_kpi + 4)
-    pdf.set_font('Arial', 'B', fnt_kpi_t)
+    pdf.set_font('Arial', 'B', fnt_kpi_t);
     pdf.set_text_color(100, 116, 139)
     pdf.cell(largura_card, 5, "APONTAMENTO (GERAL)", 0, 1, 'C')
-    pdf.set_xy(pos_x1, y_kpi + 10)
-    pdf.set_font('Arial', 'B', fnt_kpi_v)
+    pdf.set_xy(pos_x1, y_kpi + 10);
+    pdf.set_font('Arial', 'B', fnt_kpi_v);
     pdf.set_text_color(15, 23, 42)
     pdf.cell(largura_card, 7, f"{efi_media:.1f}%", 0, 1, 'C')
 
     pos_x2 = pos_x1 + largura_card + 5
     pdf.rect(pos_x2, y_kpi, largura_card, 22, 'DF')
-    pdf.set_xy(pos_x2, y_kpi + 4)
-    pdf.set_font('Arial', 'B', fnt_kpi_t)
+    pdf.set_xy(pos_x2, y_kpi + 4);
+    pdf.set_font('Arial', 'B', fnt_kpi_t);
     pdf.set_text_color(100, 116, 139)
     pdf.cell(largura_card, 5, "HORAS PAGAS (RH)", 0, 1, 'C')
-    pdf.set_xy(pos_x2, y_kpi + 10)
-    pdf.set_font('Arial', 'B', fnt_kpi_v)
+    pdf.set_xy(pos_x2, y_kpi + 10);
+    pdf.set_font('Arial', 'B', fnt_kpi_v);
     pdf.set_text_color(15, 23, 42)
     pdf.cell(largura_card, 7, f"{h_rh:.0f} h", 0, 1, 'C')
 
     pos_x3 = pos_x2 + largura_card + 5
     pdf.rect(pos_x3, y_kpi, largura_card, 22, 'DF')
-    pdf.set_xy(pos_x3, y_kpi + 4)
-    pdf.set_font('Arial', 'B', fnt_kpi_t)
+    pdf.set_xy(pos_x3, y_kpi + 4);
+    pdf.set_font('Arial', 'B', fnt_kpi_t);
     pdf.set_text_color(100, 116, 139)
     pdf.cell(largura_card, 5, "TAXA PRODUTIVIDADE", 0, 1, 'C')
-    pdf.set_xy(pos_x3, y_kpi + 10)
-    pdf.set_font('Arial', 'B', fnt_kpi_v)
+    pdf.set_xy(pos_x3, y_kpi + 10);
+    pdf.set_font('Arial', 'B', fnt_kpi_v);
     pdf.set_text_color(22, 163, 74)
     pdf.cell(largura_card, 7, f"{perc_produtivo:.1f}%", 0, 1, 'C')
 
     pos_x4 = pos_x3 + largura_card + 5
     pdf.rect(pos_x4, y_kpi, largura_card, 22, 'DF')
-    pdf.set_xy(pos_x4, y_kpi + 4)
-    pdf.set_font('Arial', 'B', fnt_kpi_t)
+    pdf.set_xy(pos_x4, y_kpi + 4);
+    pdf.set_font('Arial', 'B', fnt_kpi_t);
     pdf.set_text_color(100, 116, 139)
     pdf.cell(largura_card, 5, "FALHAS (SEM APONT.)", 0, 1, 'C')
-    pdf.set_xy(pos_x4, y_kpi + 10)
-    pdf.set_font('Arial', 'B', fnt_kpi_v)
+    pdf.set_xy(pos_x4, y_kpi + 10);
+    pdf.set_font('Arial', 'B', fnt_kpi_v);
     pdf.set_text_color(220, 38, 38)
     pdf.cell(largura_card, 7, f"{fantasmas} pessoas", 0, 1, 'C')
 
@@ -269,7 +274,7 @@ def processar_e_gerar_relatorios_eficiencia(df_view, df_improd_global, dt_in, dt
     pdf.cell(0, 6, "3. Qualidade dos Apontamentos (Auditoria de Refeicao):", 0, 1)
     pdf.set_font('Arial', '', 10)
     pdf.cell(0, 6,
-             f"   Foram identificados {len(df_sem_ref)} dias em que o funcionario trabalhou mas nao apontou a 'Refeicao' no sistema.",
+             f"   Foram identificados {len(df_sem_ref)} dias em que o funcionario trabalhou mais de 4h mas nao apontou 'Refeicao' no sistema.",
              0, 1)
     pdf.ln(4)
 
@@ -317,7 +322,7 @@ def processar_e_gerar_relatorios_eficiencia(df_view, df_improd_global, dt_in, dt
 
     pdf.set_font('Arial', 'B', 14)
     pdf.set_text_color(22, 102, 53)
-    pdf.cell(0, 8, "Desempenho Geral por Equipes (Setores)", 0, 1)
+    pdf.cell(0, 8, "Ranking de Desempenho por Equipe (Setor)", 0, 1)
     pdf.ln(2)
 
     if MATPLOTLIB_AVAILABLE and not df_setor.empty:
@@ -552,7 +557,7 @@ def processar_e_gerar_relatorios_eficiencia(df_view, df_improd_global, dt_in, dt
         g_str = str(row['GESTOR'])[:(22 if orientacao_pdf == 'L' else 12)].encode('latin-1', 'replace').decode(
             'latin-1')
 
-        x_start = pdf.get_x()
+        x_start = pdf.get_x();
         y_start = pdf.get_y()
 
         pdf.cell(w_c[0], 12, "", 'B', 0, 'C', fill=True)
@@ -566,8 +571,7 @@ def processar_e_gerar_relatorios_eficiencia(df_view, df_improd_global, dt_in, dt
         if circ_img:
             pdf.image(circ_img, x=img_x, y=img_y, w=img_s, h=img_s)
         else:
-            pdf.set_draw_color(220, 220, 220)
-            pdf.rect(img_x, img_y, img_s, img_s, 'D')
+            pdf.set_draw_color(220, 220, 220); pdf.rect(img_x, img_y, img_s, img_s, 'D')
 
         pdf.cell(w_c[1], 12, f" {s_str}", 'B', 0, 'L', fill=True)
         pdf.cell(w_c[2], 12, f" {n_str}", 'B', 0, 'L', fill=True)
@@ -581,7 +585,7 @@ def processar_e_gerar_relatorios_eficiencia(df_view, df_improd_global, dt_in, dt
         fill = not fill
 
     # ==============================================================================
-    # PÁGINA 5: MATRIZ DE CALENDÁRIO DIÁRIO (COM FOTO)
+    # PÁGINA 5: MATRIZ DE CALENDÁRIO DIÁRIO
     # ==============================================================================
     pdf.add_page()
     pdf.set_font('Arial', 'B', 14)
@@ -627,8 +631,7 @@ def processar_e_gerar_relatorios_eficiencia(df_view, df_improd_global, dt_in, dt
         df_view_pdf.loc[mask_super_pdf, 'MATRIZ_VAL'] = -2
 
         pivot_matrix = df_view_pdf.pivot_table(index=['SETOR', 'MATRICULA_FINAL', 'NOME_FINAL'], columns='DT_REF',
-                                               values='MATRIZ_VAL',
-                                               aggfunc='mean')
+                                               values='MATRIZ_VAL', aggfunc='mean')
         pivot_matrix = pivot_matrix.sort_index(level=[0, 1, 2])
 
         pdf.set_font('Arial', 'B', 5 if orientacao_pdf == 'P' else 6)
@@ -636,7 +639,7 @@ def processar_e_gerar_relatorios_eficiencia(df_view, df_improd_global, dt_in, dt
 
         for idx, row in pivot_matrix.iterrows():
             if pdf.get_y() > max_y_page - 12:
-                pdf.add_page()
+                pdf.add_page();
                 print_matrix_header()
 
             setor, matricula, nome = idx
@@ -644,7 +647,7 @@ def processar_e_gerar_relatorios_eficiencia(df_view, df_improd_global, dt_in, dt
                 'latin-1')
             nome_str = str(nome)[:(22 if orientacao_pdf == 'L' else 16)].encode('latin-1', 'replace').decode('latin-1')
 
-            x_curr = pdf.get_x()
+            x_curr = pdf.get_x();
             y_curr = pdf.get_y()
 
             bg_rgb = (245, 247, 250)
@@ -659,8 +662,7 @@ def processar_e_gerar_relatorios_eficiencia(df_view, df_improd_global, dt_in, dt
             if circ_img:
                 pdf.image(circ_img, x=img_x, y=img_y, w=img_s, h=img_s)
             else:
-                pdf.set_draw_color(200, 200, 200)
-                pdf.rect(img_x, img_y, img_s, img_s, 'D')
+                pdf.set_draw_color(200, 200, 200); pdf.rect(img_x, img_y, img_s, img_s, 'D')
 
             pdf.set_xy(x_curr + w_foto_m, y_curr)
 
@@ -672,34 +674,130 @@ def processar_e_gerar_relatorios_eficiencia(df_view, df_improd_global, dt_in, dt
                 val = row.get(d, np.nan)
 
                 if pd.isna(val) or val == 0:
-                    pdf.set_fill_color(240, 240, 240)
-                    txt = "-"
+                    pdf.set_fill_color(240, 240, 240);
+                    txt = "-";
                     pdf.set_text_color(180, 180, 180)
                 elif val == -1:
-                    pdf.set_fill_color(254, 215, 170)
-                    txt = "0"
+                    pdf.set_fill_color(254, 215, 170);
+                    txt = "0";
                     pdf.set_text_color(154, 52, 18)
                 elif val == -2:
-                    pdf.set_fill_color(233, 213, 255)
-                    txt = ">100"
+                    pdf.set_fill_color(233, 213, 255);
+                    txt = ">100";
                     pdf.set_text_color(107, 33, 168)
                 else:
                     txt = f"{val:.0f}"
                     if val >= 85:
-                        pdf.set_fill_color(187, 247, 208)
-                        pdf.set_text_color(22, 101, 52)
+                        pdf.set_fill_color(187, 247, 208); pdf.set_text_color(22, 101, 52)
                     elif val >= 70:
-                        pdf.set_fill_color(254, 240, 138)
-                        pdf.set_text_color(161, 98, 7)
+                        pdf.set_fill_color(254, 240, 138); pdf.set_text_color(161, 98, 7)
                     else:
-                        pdf.set_fill_color(254, 202, 202)
-                        pdf.set_text_color(153, 27, 27)
+                        pdf.set_fill_color(254, 202, 202); pdf.set_text_color(153, 27, 27)
 
                 pdf.cell(w_dia_m, 10, txt, 1, 0, 'C', fill=True)
             pdf.ln()
 
     # ==============================================================================
-    # PÁGINA 6: ESPELHO DE PONTO DIÁRIO (COM FOTOS E TOTALIZADOR)
+    # PÁGINA 6: MATRIZ DE APONTAMENTOS DE REFEIÇÃO (NOVA)
+    # ==============================================================================
+    df_ref_pdf = df_ref_dados.copy()
+    if not df_ref_pdf.empty:
+        dias_unicos_ref = sorted(df_ref_pdf['DT_REF'].dropna().unique())
+        max_dias_ref = min(len(dias_unicos_ref), 31)
+        dias_to_plot_ref = dias_unicos_ref[:max_dias_ref]
+        w_dia_m_ref = (w_total - w_nome_m - w_setor_m - w_foto_m) / max_dias_ref if max_dias_ref > 0 else 10
+
+        pdf.add_page()
+        pdf.set_font('Arial', 'B', 14)
+        pdf.set_text_color(22, 102, 53)
+        pdf.cell(0, 8, "Matriz de Auditoria de Refeicao Diaria", 0, 1)
+
+        pdf.set_font('Arial', '', 8)
+        pdf.set_text_color(80, 80, 80)
+        pdf.cell(0, 5,
+                 "Legenda: Verde (Sim - Apontou) | Vermelho (Nao - Faltou) | Cinza (Folga / Sem Jornada Suficiente)", 0,
+                 1)
+        pdf.ln(2)
+
+        def get_ref_val(r):
+            if r['APONTOU_REFEICAO'] == 'Sim': return 1
+            if r['H_REAL_LIQ'] > 4.0 and r['APONTOU_REFEICAO'] == 'Não': return -1
+            return 0
+
+        df_ref_pdf['REF_VAL'] = df_ref_pdf.apply(get_ref_val, axis=1)
+        pivot_ref = df_ref_pdf.pivot_table(index=['SETOR', 'MATRICULA_FINAL', 'NOME_FINAL'], columns='DT_REF',
+                                           values='REF_VAL', aggfunc='min')
+        pivot_ref = pivot_ref.sort_index(level=[0, 1, 2])
+
+        def print_matrix_ref_header():
+            pdf.set_font('Arial', 'B', 7)
+            pdf.set_fill_color(22, 102, 53)
+            pdf.set_text_color(255, 255, 255)
+            pdf.cell(w_foto_m, 6, " Foto", 1, 0, 'C', fill=True)
+            pdf.cell(w_setor_m, 6, " Setor", 1, 0, 'L', fill=True)
+            pdf.cell(w_nome_m, 6, " Colaborador", 1, 0, 'L', fill=True)
+            for d in dias_to_plot_ref:
+                pdf.cell(w_dia_m_ref, 6, d.strftime('%d'), 1, 0, 'C', fill=True)
+            pdf.ln()
+
+        print_matrix_ref_header()
+        pdf.set_font('Arial', 'B', 5 if orientacao_pdf == 'P' else 6)
+        pdf.set_draw_color(220, 220, 220)
+
+        for idx, row in pivot_ref.iterrows():
+            if pdf.get_y() > max_y_page - 12:
+                pdf.add_page();
+                print_matrix_ref_header()
+
+            setor, matricula, nome = idx
+            setor_str = str(setor)[:(15 if orientacao_pdf == 'L' else 10)].encode('latin-1', 'replace').decode(
+                'latin-1')
+            nome_str = str(nome)[:(22 if orientacao_pdf == 'L' else 16)].encode('latin-1', 'replace').decode('latin-1')
+
+            x_curr = pdf.get_x();
+            y_curr = pdf.get_y()
+
+            bg_rgb = (245, 247, 250)
+            pdf.set_fill_color(*bg_rgb)
+            pdf.rect(x_curr, y_curr, w_foto_m, 10, 'DF')
+
+            circ_img = get_circular_avatar(matricula, bg_rgb)
+            img_s = 8
+            img_x = x_curr + (w_foto_m - img_s) / 2
+            img_y = y_curr + (10 - img_s) / 2
+
+            if circ_img:
+                pdf.image(circ_img, x=img_x, y=img_y, w=img_s, h=img_s)
+            else:
+                pdf.set_draw_color(200, 200, 200); pdf.rect(img_x, img_y, img_s, img_s, 'D')
+
+            pdf.set_xy(x_curr + w_foto_m, y_curr)
+
+            pdf.set_text_color(40, 40, 40)
+            pdf.cell(w_setor_m, 10, f" {setor_str}", 1, 0, 'L', fill=True)
+            pdf.cell(w_nome_m, 10, f" {nome_str}", 1, 0, 'L', fill=True)
+
+            for d in dias_to_plot_ref:
+                val = row.get(d, np.nan)
+
+                if pd.isna(val) or val == 0:
+                    pdf.set_fill_color(240, 240, 240);
+                    txt = "-";
+                    pdf.set_text_color(180, 180, 180)
+                elif val == 1:
+                    pdf.set_fill_color(187, 247, 208);
+                    txt = "Sim";
+                    pdf.set_text_color(22, 101, 52)
+                elif val == -1:
+                    pdf.set_fill_color(254, 202, 202);
+                    txt = "Nao";
+                    pdf.set_text_color(153, 27, 27)
+
+                pdf.cell(w_dia_m_ref, 10, txt, 1, 0, 'C', fill=True)
+            pdf.ln()
+
+    # ==============================================================================
+    # PÁGINA 7: ESPELHO DE PONTO DIÁRIO (COM FOTOS E TOTALIZADOR)
     # ==============================================================================
     dias_unicos_espelho = sorted(df_espelho['DT_REF'].dropna().unique())
     max_dias_espelho = min(len(dias_unicos_espelho), 31)
@@ -732,7 +830,7 @@ def processar_e_gerar_relatorios_eficiencia(df_view, df_improd_global, dt_in, dt
             pdf.cell(w_foto_p, 6, " Foto", 1, 0, 'C', fill=True)
             pdf.cell(w_setor_p, 6, " Setor", 1, 0, 'L', fill=True)
             pdf.cell(w_nome_p, 6, " Colaborador", 1, 0, 'L', fill=True)
-            for d in dias_to_plot:
+            for d in dias_to_plot_espelho:
                 pdf.cell(w_dia_p, 6, d.strftime('%d'), 1, 0, 'C', fill=True)
             pdf.cell(w_saldo_p, 6, " Saldo", 1, 0, 'C', fill=True)
             pdf.ln()
@@ -750,7 +848,7 @@ def processar_e_gerar_relatorios_eficiencia(df_view, df_improd_global, dt_in, dt
 
         for idx, row in pivot_ponto.iterrows():
             if pdf.get_y() > max_y_page - 12:
-                pdf.add_page()
+                pdf.add_page();
                 print_matrix_ponto_header()
 
             setor, matricula, nome = idx
@@ -758,7 +856,7 @@ def processar_e_gerar_relatorios_eficiencia(df_view, df_improd_global, dt_in, dt
                 'latin-1')
             nome_str = str(nome)[:(22 if orientacao_pdf == 'L' else 16)].encode('latin-1', 'replace').decode('latin-1')
 
-            x_start_row = pdf.get_x()
+            x_start_row = pdf.get_x();
             y_start_row = pdf.get_y()
 
             bg_rgb = (245, 247, 250)
@@ -773,8 +871,7 @@ def processar_e_gerar_relatorios_eficiencia(df_view, df_improd_global, dt_in, dt
             if circ_img:
                 pdf.image(circ_img, x=img_x, y=img_y, w=img_s, h=img_s)
             else:
-                pdf.set_draw_color(200, 200, 200)
-                pdf.rect(img_x, img_y, img_s, img_s, 'D')
+                pdf.set_draw_color(200, 200, 200); pdf.rect(img_x, img_y, img_s, img_s, 'D')
 
             pdf.set_text_color(40, 40, 40)
             pdf.set_font('Arial', 'B', 6)
@@ -797,20 +894,20 @@ def processar_e_gerar_relatorios_eficiencia(df_view, df_improd_global, dt_in, dt
                 val_str = str(val).strip().upper()
 
                 if pd.isna(val) or val_str == 'NAN' or val_str == '-' or val_str == '':
-                    pdf.set_fill_color(240, 240, 240)
-                    pdf.set_text_color(180, 180, 180)
+                    pdf.set_fill_color(240, 240, 240);
+                    pdf.set_text_color(180, 180, 180);
                     parts = ["-"]
                 elif any(k in val_str for k in ['FOLGA', 'FERIADO', 'DSR', 'COMPENSADO']):
-                    pdf.set_fill_color(219, 234, 254)
-                    pdf.set_text_color(30, 58, 138)
+                    pdf.set_fill_color(219, 234, 254);
+                    pdf.set_text_color(30, 58, 138);
                     parts = ["F"]
                 else:
-                    pdf.set_fill_color(255, 255, 255)
+                    pdf.set_fill_color(255, 255, 255);
                     pdf.set_text_color(40, 40, 40)
                     val_clean = val_str.replace(',', '.')
                     parts = val_clean.split('/') if '/' in val_clean else [val_clean]
 
-                x_curr = pdf.get_x()
+                x_curr = pdf.get_x();
                 y_curr = pdf.get_y()
 
                 pdf.rect(x_curr, y_curr, w_dia_p, 10, 'DF')
@@ -829,12 +926,12 @@ def processar_e_gerar_relatorios_eficiencia(df_view, df_improd_global, dt_in, dt
             emp_stats = df_rank_stats[
                 (df_rank_stats['MATRICULA_FINAL'] == matricula) & (df_rank_stats['SETOR'] == setor)]
             if not emp_stats.empty:
-                tot_rh = emp_stats.iloc[0]['H_REAL_LIQ']
+                tot_rh = emp_stats.iloc[0]['H_REAL_LIQ'];
                 tot_pims = emp_stats.iloc[0]['HORAS_DEC']
             else:
                 tot_rh, tot_pims = 0, 0
 
-            x_curr = pdf.get_x()
+            x_curr = pdf.get_x();
             y_curr = pdf.get_y()
             pdf.set_fill_color(248, 250, 252)
             pdf.rect(x_curr, y_curr, w_saldo_p, 10, 'DF')
@@ -851,7 +948,7 @@ def processar_e_gerar_relatorios_eficiencia(df_view, df_improd_global, dt_in, dt
             pdf.set_xy(10, y_start_row + 10)
 
     # ==============================================================================
-    # PÁGINA 7: RANKING TOP 10 (COLABORADORES)
+    # PÁGINA 8: RANKING TOP 10 COLABORADORES
     # ==============================================================================
 
     df_top10 = df_view.groupby(['MATRICULA_FINAL', 'NOME_FINAL', 'SETOR']).agg({
@@ -1167,13 +1264,12 @@ def processar_e_gerar_relatorios_eficiencia(df_view, df_improd_global, dt_in, dt
             pdf.cell(20, 3, lbl_sec, 0, 1, 'C')
 
     # ==============================================================================
-    # PÁGINA 8: RANKING DA GESTÃO (LIDERANÇA) - BASEADO NO NOVO ESTILO VISUAL
+    # PÁGINA 9: RANKING DA GESTÃO E SETOR
     # ==============================================================================
-    df_gestao = df_view.groupby('GESTOR').agg({
+    df_gestao = df_view.groupby(['GESTOR', 'SETOR']).agg({
         'HORAS_PROD': 'sum', 'HORAS_IMPROD': 'sum', 'HORAS_DEC': 'sum', 'H_REAL_LIQ': 'sum'
     }).reset_index()
 
-    # Remove gestores sem horas no RH ou marcados como "Não Definido"
     df_gestao = df_gestao[(df_gestao['H_REAL_LIQ'] > 0) & (df_gestao['GESTOR'] != 'Não Definido')]
 
     df_gestao['HORAS_VALIDAS'] = df_gestao[['HORAS_DEC', 'H_REAL_LIQ']].min(axis=1)
@@ -1196,7 +1292,7 @@ def processar_e_gerar_relatorios_eficiencia(df_view, df_improd_global, dt_in, dt
         pdf.add_page()
         pdf.set_font('Arial', 'B', 16)
         pdf.set_text_color(22, 102, 53)
-        pdf.cell(0, 8, f"Ranking da Lideranca: Desempenho por Gestor", 0, 1, 'C')
+        pdf.cell(0, 8, f"Ranking da Lideranca: Desempenho por Gestor e Setor", 0, 1, 'C')
 
         pdf.set_font('Arial', '', 9)
         pdf.set_text_color(100, 116, 139)
@@ -1205,8 +1301,8 @@ def processar_e_gerar_relatorios_eficiencia(df_view, df_improd_global, dt_in, dt
         start_y = pdf.get_y() + 10
 
         cols = 2 if orientacao_pdf == 'L' else 1
-        card_w_list = 120 if orientacao_pdf == 'L' else 170
-        gap_x = 10 if orientacao_pdf == 'L' else 0
+        card_w_list = 135 if orientacao_pdf == 'L' else 170
+        gap_x = 5 if orientacao_pdf == 'L' else 0
         total_w = (card_w_list * cols) + (gap_x * (cols - 1))
         margin_l = (297 - total_w) / 2 if orientacao_pdf == 'L' else (210 - total_w) / 2
 
@@ -1224,24 +1320,22 @@ def processar_e_gerar_relatorios_eficiencia(df_view, df_improd_global, dt_in, dt
 
             x_start = margin_l + col_index * (card_w_list + gap_x)
 
-            # Fundo do Card Estilo Imagem (Branco, borda fina)
             pdf.set_fill_color(252, 253, 254)
             pdf.rect(x_start, y_atual, card_w_list, 16, 'F')
             pdf.set_draw_color(226, 232, 240)
             pdf.rect(x_start, y_atual, card_w_list, 16, 'D')
 
-            # Faixa do Rank Esquerda
             if idx == 1:
-                pdf.set_fill_color(250, 191, 36)  # Ouro
+                pdf.set_fill_color(250, 191, 36);
                 pdf.set_text_color(255, 255, 255)
             elif idx == 2:
-                pdf.set_fill_color(148, 163, 184)  # Prata
+                pdf.set_fill_color(148, 163, 184);
                 pdf.set_text_color(255, 255, 255)
             elif idx == 3:
-                pdf.set_fill_color(180, 83, 9)  # Bronze
+                pdf.set_fill_color(180, 83, 9);
                 pdf.set_text_color(255, 255, 255)
             else:
-                pdf.set_fill_color(241, 245, 249)  # Normal
+                pdf.set_fill_color(241, 245, 249);
                 pdf.set_text_color(100, 116, 139)
 
             pdf.rect(x_start, y_atual, 12, 16, 'F')
@@ -1249,38 +1343,45 @@ def processar_e_gerar_relatorios_eficiencia(df_view, df_improd_global, dt_in, dt
             pdf.set_xy(x_start, y_atual + 5)
             pdf.cell(12, 6, f"{idx}o", 0, 0, 'C')
 
-            # Avatar Circular (Nome do Gestor)
             gestor_nome = str(row['GESTOR']).strip()
-            circ_img = get_circular_avatar(gestor_nome, (252, 253, 254))
-            img_s = 12
-            img_x = x_start + 15
-            img_y = y_atual + 2
+            setor_nome = str(row['SETOR']).strip()
 
-            if circ_img:
-                pdf.image(circ_img, x=img_x, y=img_y, w=img_s, h=img_s)
-            else:
-                # Fallback: Um círculo genérico com a inicial do Gestor
-                pdf.set_fill_color(226, 232, 240)
-                pdf.set_draw_color(200, 200, 200)
-                pdf.rect(img_x, img_y, img_s, img_s, 'FD')
-                pdf.set_text_color(100, 116, 139)
-                pdf.set_font('Arial', 'B', 6)
-                pdf.set_xy(img_x, img_y + 3)
-                pdf.cell(img_s, img_s / 2, gestor_nome[0] if len(gestor_nome) > 0 else "?", 0, 0, 'C')
-
-            # Nome e Função
-            pdf.set_text_color(30, 41, 59)
-            pdf.set_font('Arial', 'B', 9)
-            pdf.set_xy(x_start + 30, y_atual + 3)
-            nome_linha = gestor_nome.encode('latin-1', 'replace').decode('latin-1')
-            pdf.cell(45, 5, nome_linha[:22], 0, 1, 'L')
-
-            pdf.set_font('Arial', '', 7)
+            img_s = 10
+            img_x = x_start + 14
+            img_y = y_atual + 3
+            pdf.set_fill_color(226, 232, 240)
+            pdf.set_draw_color(200, 200, 200)
+            pdf.rect(img_x, img_y, img_s, img_s, 'F')
             pdf.set_text_color(100, 116, 139)
-            pdf.set_xy(x_start + 30, y_atual + 8)
-            pdf.cell(45, 4, "Gestor de Equipe", 0, 1, 'L')
+            pdf.set_font('Arial', 'B', 7)
+            pdf.set_xy(img_x, img_y + 1.5)
+            pdf.cell(img_s, img_s / 2, gestor_nome[0] if len(gestor_nome) > 0 else "?", 0, 0, 'C')
 
-            # Métricas Lado Direito (Badges)
+            pdf.set_text_color(30, 41, 59)
+            pdf.set_font('Arial', 'B', 8)
+            pdf.set_xy(x_start + 26, y_atual + 3)
+            nome_linha = gestor_nome.encode('latin-1', 'replace').decode('latin-1')
+            pdf.cell(28, 5, nome_linha[:15], 0, 1, 'L')
+
+            pdf.set_font('Arial', '', 5)
+            pdf.set_text_color(100, 116, 139)
+            pdf.set_xy(x_start + 26, y_atual + 8)
+            pdf.cell(28, 4, "Gestor", 0, 1, 'L')
+
+            pdf.set_draw_color(226, 232, 240)
+            pdf.line(x_start + 55, y_atual + 2, x_start + 55, y_atual + 14)
+
+            pdf.set_text_color(30, 41, 59)
+            pdf.set_font('Arial', 'B', 7)
+            pdf.set_xy(x_start + 57, y_atual + 3)
+            setor_linha = setor_nome.encode('latin-1', 'replace').decode('latin-1')
+            pdf.cell(33, 5, setor_linha[:18], 0, 1, 'L')
+
+            pdf.set_font('Arial', '', 5)
+            pdf.set_text_color(100, 116, 139)
+            pdf.set_xy(x_start + 57, y_atual + 8)
+            pdf.cell(33, 4, "Setor", 0, 1, 'L')
+
             w_stat = 20
             x_stat1 = x_start + card_w_list - (w_stat * 2) - 6
             x_stat2 = x_start + card_w_list - w_stat - 2
@@ -1289,7 +1390,7 @@ def processar_e_gerar_relatorios_eficiencia(df_view, df_improd_global, dt_in, dt
                 val_main = f"{row['EFI_PROD']:.0f}%"
                 lbl_main = "Eficiencia"
                 val_sec = f"{row['HORAS_DEC']:.0f}h"
-                lbl_sec = "Horas Totais"
+                lbl_sec = "Total Apontado"
                 is_good = row['EFI_PROD'] >= 85
             elif "Volume" in criterio_ranking:
                 val_main = f"{row['HORAS_DEC']:.0f}h"
@@ -1299,12 +1400,11 @@ def processar_e_gerar_relatorios_eficiencia(df_view, df_improd_global, dt_in, dt
                 is_good = True
             else:
                 val_main = f"{row['PCT_VISUAL']:.0f}%"
-                lbl_main = "Apontado"
+                lbl_main = "Engajamento"
                 val_sec = f"{row['HORAS_DEC']:.0f}h"
-                lbl_sec = "Horas Totais"
+                lbl_sec = "Total Apontado"
                 is_good = row['PCT_VISUAL'] >= 85
 
-            # Badge Destaque
             if is_good:
                 pdf.set_fill_color(220, 252, 231);
                 pdf.set_text_color(22, 101, 52)
@@ -1320,7 +1420,6 @@ def processar_e_gerar_relatorios_eficiencia(df_view, df_improd_global, dt_in, dt
             pdf.set_xy(x_stat1, y_atual + 9);
             pdf.cell(18, 3, lbl_main, 0, 1, 'C')
 
-            # Texto Secundário
             pdf.set_text_color(71, 85, 105)
             pdf.set_font('Arial', 'B', 8)
             pdf.set_xy(x_stat2, y_atual + 4)
@@ -1383,7 +1482,31 @@ def processar_e_gerar_relatorios_eficiencia(df_view, df_improd_global, dt_in, dt
 
         pivot_excel.columns = novas_colunas
 
-        # Excel 2: ESPELHO DE PONTO DO RH
+        # Excel 2: Matriz de Refeição
+        df_ref_excel = df_ref_dados.copy()
+        if not df_ref_excel.empty:
+            def get_ref_val(r):
+                if r['APONTOU_REFEICAO'] == 'Sim': return 1
+                if r['H_REAL_LIQ'] > 4.0 and r['APONTOU_REFEICAO'] == 'Não': return -1
+                return 0
+
+            df_ref_excel['REF_VAL'] = df_ref_excel.apply(get_ref_val, axis=1)
+            pivot_ref_excel = df_ref_excel.pivot_table(index=['SETOR', 'GESTOR', 'MATRICULA_FINAL', 'NOME_FINAL'],
+                                                       columns='DT_REF', values='REF_VAL', aggfunc='min').reset_index()
+
+            novas_colunas_ref = []
+            for c in pivot_ref_excel.columns:
+                if isinstance(c, datetime) or hasattr(c, 'strftime'):
+                    novas_colunas_ref.append(c.strftime('%d/%m'))
+                else:
+                    novas_colunas_ref.append(str(c))
+            pivot_ref_excel.columns = novas_colunas_ref
+
+            for col in novas_colunas_ref[4:]:
+                pivot_ref_excel[col] = pivot_ref_excel[col].apply(
+                    lambda x: "Sim" if x == 1 else ("Não" if x == -1 else "-"))
+
+        # Excel 3: ESPELHO DE PONTO DO RH
         pivot_excel_ponto = df_espelho.pivot_table(index=['SETOR', 'GESTOR', 'MATRICULA_FINAL', 'NOME_FINAL'],
                                                    columns='DT_REF',
                                                    values='REAL_H', aggfunc='first').reset_index()
@@ -1401,7 +1524,8 @@ def processar_e_gerar_relatorios_eficiencia(df_view, df_improd_global, dt_in, dt
         df_export.to_excel(writer, sheet_name="Base Detalhada", index=False)
         df_setor.to_excel(writer, sheet_name="Ranking Setores", index=False)
         df_rank_excel.to_excel(writer, sheet_name="Ranking Colaboradores", index=False)
-        pivot_excel.to_excel(writer, sheet_name="Matriz Diaria", index=False)
+        pivot_excel.to_excel(writer, sheet_name="Matriz Diaria Eficiencia", index=False)
+        if not df_ref_excel.empty: pivot_ref_excel.to_excel(writer, sheet_name="Matriz de Refeicao", index=False)
         pivot_excel_ponto.to_excel(writer, sheet_name="Espelho de Ponto", index=False)
 
         if not improd_filtered.empty:
@@ -1497,7 +1621,6 @@ def processar_dados_corporativos(file_pims, file_rh):
         pims_agg['MATRICULA'] = pims_agg['MATRICULA'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
         pims_agg['APONTOU_REFEICAO'] = np.where(pims_agg['IS_REFEICAO'] > 0, 'Sim', 'Não')
 
-        # RAIO-X IMPRODUTIVO: Agrupa horas improdutivas detalhadas
         pims_improd = pims[pims['TIPO_OPER_CLEAN'] == 'IMPRODUTIVO'].groupby(['MATRICULA', 'DT_REF', 'OPERACAO_NOME'])[
             'HORAS_DEC'].sum().reset_index()
         pims_improd['MATRICULA'] = pims_improd['MATRICULA'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
@@ -1542,7 +1665,6 @@ def processar_dados_corporativos(file_pims, file_rh):
             'H_REAL_LIQ': 'sum'
         }).reset_index()
 
-        # Limpeza e Abreviação dos Nomes de Setor
         rh_agg['SETOR'] = rh_agg['SETOR'].str.replace(r'^\d+\s*-\s*', '', regex=True)
         rh_agg['SETOR'] = rh_agg['SETOR'].str.replace(r'(?i)^SETOR\s+(DE\s+)?', '', regex=True)
         rh_agg['SETOR'] = rh_agg['SETOR'].str.replace(r'(?i)^MANUTEN[CÇ][AÃ]O\s+', '', regex=True)
@@ -1566,7 +1688,6 @@ def processar_dados_corporativos(file_pims, file_rh):
         df_final['FALTA_REFEICAO'] = np.where((df_final['H_REAL_LIQ'] > 4.0) & (df_final['APONTOU_REFEICAO'] == 'Não'),
                                               1, 0)
 
-        # NOVA AUDITORIA: ALERTA DE SUPER-APONTAMENTO (Tolerância de 0.5h/30 min)
         conditions = [
             (df_final['H_REAL_LIQ'] > 0.1) & (df_final['HORAS_DEC'] > (df_final['H_REAL_LIQ'] + 0.5)),
             (df_final['H_REAL_LIQ'] > 0.1) & (df_final['HORAS_DEC'] < 0.1),
@@ -1585,7 +1706,7 @@ def processar_dados_corporativos(file_pims, file_rh):
 
         df_final['EFICIENCIA_GERAL'] = np.where(df_final['H_REAL_LIQ'] > 0,
                                                 (df_final['HORAS_DEC'] / df_final['H_REAL_LIQ']) * 100, 0)
-        df_final['EFICIENCIA_GERAL'] = df_final['EFICIENCIA_GERAL'].clip(upper=100)  # Trava 100%
+        df_final['EFICIENCIA_GERAL'] = df_final['EFICIENCIA_GERAL'].clip(upper=100)
         df_final['EFICIENCIA_VISUAL'] = df_final['EFICIENCIA_GERAL']
 
         return df_final, pims_improd
@@ -1753,6 +1874,15 @@ with st.sidebar:
     sel_nomes = st.multiselect("Colaborador", options=lista_nomes, default=[], help="Deixe vazio para selecionar todos")
 
     st.markdown("---")
+    st.markdown("### 🍔 Auditoria de Refeição")
+    sel_setores_ref = st.multiselect(
+        "Setores c/ Obrigatoriedade",
+        options=lista_setores,
+        default=lista_setores,
+        help="Permite escolher equipes para auditoria de refeição independente do filtro principal."
+    )
+
+    st.markdown("---")
     st.markdown("### ⚡ Filtros Rápidos de Auditoria")
     filtro_rapido = st.radio("Isolar anomalias:",
                              ["👁️ Mostrar Todos", "🚨 Sem Apontamento", "🟠 Falta de Refeição", "🟣 Super-Apontamento",
@@ -1786,20 +1916,27 @@ else:
 # --- CAPTURA DA BASE DO ESPELHO DE PONTO (SEM FILTROS EXCETO DATA) ---
 df_espelho = df_view.copy()
 
-# --- APLICAÇÃO DOS DEMAIS FILTROS APENAS PARA O RELATÓRIO GERAL ---
-df_view = df_view[df_view['GESTOR'].isin(sel_gestores)]
-df_view = df_view[df_view['SETOR'].isin(sel_setores)]
-if sel_turmas: df_view = df_view[df_view['TURMA'].astype(str).isin(sel_turmas)]
-if sel_nomes: df_view = df_view[df_view['NOME_FINAL'].isin(sel_nomes)]
+# --- APLICAÇÃO DOS FILTROS COMPARTILHADOS ---
+df_view_shared = df_view[df_view['GESTOR'].isin(sel_gestores)].copy()
+if sel_turmas: df_view_shared = df_view_shared[df_view_shared['TURMA'].astype(str).isin(sel_turmas)]
+if sel_nomes: df_view_shared = df_view_shared[df_view_shared['NOME_FINAL'].isin(sel_nomes)]
+
+# --- SEPARAÇÃO DOS DATAFRAMES (INDEPENDÊNCIA DE SETORES) ---
+df_ref_dados = df_view_shared[df_view_shared['SETOR'].isin(sel_setores_ref)].copy()
+df_view = df_view_shared[df_view_shared['SETOR'].isin(sel_setores)].copy()
 
 if "Sem Apontamento" in filtro_rapido:
     df_view = df_view[df_view['STATUS'] == 'CRÍTICO (Sem Apontamento)']
+    df_ref_dados = df_ref_dados[df_ref_dados['STATUS'] == 'CRÍTICO (Sem Apontamento)']
 elif "Falta de Refeição" in filtro_rapido:
     df_view = df_view[df_view['STATUS'] == 'ALERTA (Sem Refeição)']
+    df_ref_dados = df_ref_dados[df_ref_dados['STATUS'] == 'ALERTA (Sem Refeição)']
 elif "Super-Apontamento" in filtro_rapido:
     df_view = df_view[df_view['STATUS'] == 'ALERTA (Super-Apontamento)']
+    df_ref_dados = df_ref_dados[df_ref_dados['STATUS'] == 'ALERTA (Super-Apontamento)']
 elif "Ponto Não Batido" in filtro_rapido:
     df_view = df_view[df_view['STATUS'] == 'ALERTA (Ponto Não Batido)']
+    df_ref_dados = df_ref_dados[df_ref_dados['STATUS'] == 'ALERTA (Ponto Não Batido)']
 
 # ==============================================================================
 # 3. DASHBOARD GERENCIAL UI
@@ -1817,10 +1954,65 @@ h_total_pims = df_view['HORAS_DEC'].sum()
 taxa_produtividade = (h_produtivas / h_total_pims * 100) if h_total_pims > 0 else 0
 taxa_produtividade = min(taxa_produtividade, 100)
 
-dias_sem_refeicao = len(df_view[df_view['STATUS'] == 'ALERTA (Sem Refeição)'])
+dias_sem_refeicao = len(df_ref_dados[df_ref_dados['STATUS'] == 'ALERTA (Sem Refeição)'])
 
-st.markdown(
-    f"**🗓️ Período Selecionado:** {d_in.strftime('%d/%m/%Y')} a {d_out.strftime('%d/%m/%Y')} ({total_dias_periodo} dias) &nbsp;&bull;&nbsp; **Dias Trabalhados:** {dias_trabalhados} dias com apontamento na base.")
+df_criticos_ui = df_view[df_view['STATUS'].str.contains('Sem Apontamento|Ponto Não Batido', na=False)]
+fantasmas_ui = df_criticos_ui['NOME_FINAL'].nunique()
+
+
+@st.dialog("📱 Resumo para WhatsApp")
+def gerar_resumo_whatsapp(df_v, efi_media_val, h_rh_val, taxa_prod_val, f_criticos_val, data_in, data_out, df_ref):
+    hoje = datetime.now().strftime('%d/%m/%Y')
+    periodo = f"{data_in.strftime('%d/%m')} a {data_out.strftime('%d/%m')}"
+
+    texto = f"⏱️ *STATUS DE APONTAMENTOS - {hoje}* ⏱️\n\n"
+    texto += f"📊 *RESUMO DO PERÍODO ({periodo})*\n"
+    texto += f"▫️ Eficiência Média: {efi_media_val:.1f}%\n"
+    texto += f"▫️ Total Horas RH: {h_rh_val:.0f}h\n"
+    texto += f"▫️ Taxa Produtividade: {taxa_prod_val:.1f}%\n"
+    texto += f"▫️ Colaboradores c/ Falha Grave: {f_criticos_val}\n\n"
+
+    df_criticos = df_v[df_v['STATUS'].str.contains('Sem Apontamento|Ponto Não Batido', na=False)]
+    if not df_criticos.empty:
+        ofensores = df_criticos.groupby(['NOME_FINAL', 'SETOR']).size().reset_index(name='FALTAS')
+        ofensores = ofensores.sort_values('FALTAS', ascending=False)
+
+        texto += f"🚨 *ATENÇÃO: FALTAS DE APONTAMENTO* 🚨\n"
+        for _, row in ofensores.head(10).iterrows():
+            plural = "s" if row['FALTAS'] > 1 else ""
+            texto += f"🔹 {row['NOME_FINAL']} ({row['SETOR']}) - {row['FALTAS']} dia{plural}\n"
+
+        if len(ofensores) > 10:
+            texto += f"*(+ {len(ofensores) - 10} outros colaboradores...)*\n"
+    else:
+        texto += f"✅ *EXCELENTE* - Nenhum colaborador com falha grave de apontamento no período!\n"
+
+    df_sem_ref = df_ref[df_ref['STATUS'] == 'ALERTA (Sem Refeição)']
+    if not df_sem_ref.empty:
+        ref_group = df_sem_ref.groupby(['NOME_FINAL', 'SETOR']).size().reset_index(name='FALTAS')
+        ref_group = ref_group.sort_values('FALTAS', ascending=False)
+        texto += f"\n🟠 *ALERTA REFEIÇÃO ({len(df_sem_ref)} ocorrências)*\n"
+        for _, row in ref_group.head(5).iterrows():
+            plural = "s" if row['FALTAS'] > 1 else ""
+            texto += f"🔸 {row['NOME_FINAL']} ({row['SETOR']}) - {row['FALTAS']} dia{plural} s/ ref.\n"
+        if len(ref_group) > 5:
+            texto += f"*(+ {len(ref_group) - 5} outros...)*\n"
+
+    texto += "\nGerado pelo *Sistema Cedro*"
+
+    st.info("Pressione o ícone de copiar no canto superior direito do bloco abaixo e cole no seu WhatsApp:")
+    st.code(texto, language="markdown")
+
+
+col_periodo, col_btn_zap = st.columns([3, 1])
+with col_periodo:
+    st.markdown(
+        f"**🗓️ Período Selecionado:** {d_in.strftime('%d/%m/%Y')} a {d_out.strftime('%d/%m/%Y')} ({total_dias_periodo} dias) &nbsp;&bull;&nbsp; **Dias Trabalhados:** {dias_trabalhados} dias com apontamento na base."
+    )
+with col_btn_zap:
+    if st.button("💬 Resumo p/ WhatsApp", use_container_width=True):
+        gerar_resumo_whatsapp(df_view, efi_media, h_rh, taxa_produtividade, fantasmas_ui, d_in, d_out, df_ref_dados)
+
 st.markdown("<br>", unsafe_allow_html=True)
 
 c1, c2, c3, c4 = st.columns(4)
@@ -1840,7 +2032,7 @@ ui_kpi_card(c4, "Alerta Refeição", f"{dias_sem_refeicao}",
 st.markdown("<br>", unsafe_allow_html=True)
 
 # ABAS DE ANÁLISE
-tab_setor, tab_top10, tab_gestao, tab_rank, tab_ofensores, tab_improd, tab_matriz, tab_dados = st.tabs([
+tab_setor, tab_top10, tab_gestao, tab_rank, tab_ofensores, tab_improd, tab_matriz, tab_refeicao, tab_dados = st.tabs([
     "🏆 Ranking de Setores",
     "⭐ Top 10 Destaques",
     "👔 Ranking da Gestão",
@@ -1848,6 +2040,7 @@ tab_setor, tab_top10, tab_gestao, tab_rank, tab_ofensores, tab_improd, tab_matri
     "🚨 Atenção RH (Ofensores)",
     "📉 Raio-X Improdutivo",
     "📅 Matriz de Apontamento",
+    "🍔 Auditoria Refeição",
     "📋 Tabela Analítica"
 ])
 
@@ -1973,315 +2166,416 @@ with tab_top10:
     else:
         st.info("Não há apontamentos suficientes para gerar o pódio.")
 
-with tab_gestao:
-    st.markdown("##### 👔 Ranking da Liderança (Desempenho por Gestor)")
-    st.caption(
-        "Agrupa todas as horas das equipes sob responsabilidade de cada gestor e cria um ranking geral da liderança.")
+    with tab_gestao:
+        st.markdown("##### 👔 Ranking da Liderança (Desempenho por Gestor e Setor)")
+        st.caption("Visão executiva do desempenho das equipes, agrupadas por seus respectivos líderes.")
 
-    df_gestao_ui = df_view.groupby('GESTOR').agg({
-        'HORAS_PROD': 'sum', 'HORAS_IMPROD': 'sum', 'HORAS_DEC': 'sum', 'H_REAL_LIQ': 'sum'
-    }).reset_index()
+        df_gestao_ui = df_view.groupby(['GESTOR', 'SETOR']).agg({
+            'HORAS_PROD': 'sum', 'HORAS_IMPROD': 'sum', 'HORAS_DEC': 'sum', 'H_REAL_LIQ': 'sum'
+        }).reset_index()
 
-    # Remove gestores sem horas ou não definidos
-    df_gestao_ui = df_gestao_ui[(df_gestao_ui['H_REAL_LIQ'] > 0) & (df_gestao_ui['GESTOR'] != 'Não Definido')]
-    df_gestao_ui['HORAS_VALIDAS'] = df_gestao_ui[['HORAS_DEC', 'H_REAL_LIQ']].min(axis=1)
-    df_gestao_ui['PCT_VISUAL'] = np.where(df_gestao_ui['H_REAL_LIQ'] > 0,
-                                          (df_gestao_ui['HORAS_DEC'] / df_gestao_ui['H_REAL_LIQ']) * 100, 0).clip(
-        max=100)
-    df_gestao_ui['EFI_PROD'] = np.where(df_gestao_ui['HORAS_DEC'] > 0,
-                                        (df_gestao_ui['HORAS_PROD'] / df_gestao_ui['HORAS_DEC']) * 100, 0).clip(max=100)
+        df_gestao_ui = df_gestao_ui[(df_gestao_ui['H_REAL_LIQ'] > 0) & (df_gestao_ui['GESTOR'] != 'Não Definido')]
+        df_gestao_ui['HORAS_VALIDAS'] = df_gestao_ui[['HORAS_DEC', 'H_REAL_LIQ']].min(axis=1)
+        df_gestao_ui['PCT_VISUAL'] = np.where(df_gestao_ui['H_REAL_LIQ'] > 0,
+                                              (df_gestao_ui['HORAS_DEC'] / df_gestao_ui['H_REAL_LIQ']) * 100, 0).clip(
+            max=100)
+        df_gestao_ui['EFI_PROD'] = np.where(df_gestao_ui['HORAS_DEC'] > 0,
+                                            (df_gestao_ui['HORAS_PROD'] / df_gestao_ui['HORAS_DEC']) * 100, 0).clip(
+            max=100)
 
-    if "Eficiência" in criterio_ranking:
-        df_gestao_ui = df_gestao_ui.sort_values(by=['EFI_PROD', 'HORAS_VALIDAS'], ascending=[False, False])
-    elif "Volume" in criterio_ranking:
-        df_gestao_ui = df_gestao_ui.sort_values(by=['HORAS_DEC', 'EFI_PROD'], ascending=[False, False])
-    else:
-        df_gestao_ui = df_gestao_ui.sort_values(by=['HORAS_VALIDAS', 'EFI_PROD'], ascending=[False, False])
-
-    if not df_gestao_ui.empty:
-        max_horas_gestao = df_gestao_ui['HORAS_DEC'].max() if not df_gestao_ui.empty else 1
-
-        html_gestao = "<div style='display: flex; flex-direction: column; gap: 15px; max-width: 700px; margin: 20px auto;'>"
-        for idx, row in enumerate(df_gestao_ui.to_dict('records'), start=1):
-            gestor_nome = str(row['GESTOR']).strip()
-            b64_g = get_foto_base64(gestor_nome)
-
-            # Cores de Posição
-            if idx == 1:
-                color_bg, color_border, medal_text = '#FEFCE8', '#FABF24', '🥇 1º Lugar'
-            elif idx == 2:
-                color_bg, color_border, medal_text = '#F8FAFC', '#94A3B8', '🥈 2º Lugar'
-            elif idx == 3:
-                color_bg, color_border, medal_text = '#FFF7ED', '#B45309', '🥉 3º Lugar'
-            else:
-                color_bg, color_border, medal_text = 'white', '#E2E8F0', f'{idx}º Lugar'
-
-            if "Eficiência" in criterio_ranking:
-                val_main = f"{row['EFI_PROD']:.0f}%"
-                lbl_main = "Efic. da Equipe"
-                val_sec = f"{row['HORAS_DEC']:.0f}h"
-                lbl_sec = "Total Apontado"
-                prog_val = row['EFI_PROD']
-            elif "Volume" in criterio_ranking:
-                val_main = f"{row['HORAS_DEC']:.0f}h"
-                lbl_main = "Total Apontado"
-                val_sec = f"{row['EFI_PROD']:.0f}%"
-                lbl_sec = "Efic. da Equipe"
-                prog_val = min((row['HORAS_DEC'] / max_horas_gestao) * 100, 100) if max_horas_gestao > 0 else 0
-            else:
-                val_main = f"{row['PCT_VISUAL']:.0f}%"
-                lbl_main = "Engajamento"
-                val_sec = f"{row['HORAS_DEC']:.0f}h"
-                lbl_sec = "Total Apontado"
-                prog_val = row['PCT_VISUAL']
-
-            bg_efic = "#FEF08A" if prog_val < 85 else "#BBF7D0"
-            cor_efic = "#A16207" if prog_val < 85 else "#166534"
-
-            html_gestao += f"<div style='display: flex; align-items: center; justify-content: space-between; background: {color_bg}; padding: 15px 20px; border-radius: 12px; border: 2px solid {color_border}; box-shadow: 0 4px 6px rgba(0,0,0,0.05);'><div style='display: flex; align-items: center; gap: 15px;'><div style='font-size: 16px; font-weight: bold; color: {color_border}; width: 85px;'>{medal_text}</div><img src='{b64_g}' style='width: 50px; height: 50px; border-radius: 50%; object-fit: cover; background-color: #f1f5f9; border: 2px solid {color_border};'/><div style='line-height: 1.3;'><div style='font-weight: 800; color: #1E293B; font-size: 15px;'>{gestor_nome}</div><div style='font-size: 12px; color: #64748B;'>Líder de Equipe</div></div></div><div style='display: flex; gap: 20px; align-items: center; text-align: center; line-height: 1.2;'><div style='display: flex; flex-direction: column; align-items: center; width: 80px;'><div style='background-color: {bg_efic}; color: {cor_efic}; font-weight: bold; padding: 6px 0px; border-radius: 6px; font-size: 16px; width: 100%;'>{val_main}</div><div style='background: #e2e8f0; width: 100%; height: 5px; margin-top: 6px; border-radius: 3px; overflow: hidden;'><div style='background: {cor_efic}; width: {prog_val}%; height: 100%; border-radius: 3px;'></div></div><div style='font-size: 10px; color: #64748B; margin-top: 4px; font-weight: 600;'>{lbl_main}</div></div><div style='display: flex; flex-direction: column; align-items: center;'><div style='font-weight: bold; color: #475569; font-size: 14px;'>{val_sec}</div><div style='font-size: 10px; color: #64748B; margin-top: 4px;'>{lbl_sec}</div></div></div></div>"
-        html_gestao += "</div>"
-        st.markdown(html_gestao, unsafe_allow_html=True)
-    else:
-        st.info("Não há dados de gestores suficientes para este período.")
-
-with tab_rank:
-    st.markdown("##### 🏅 Desempenho Geral por Colaborador")
-    df_rank = df_view.groupby(['SETOR', 'GESTOR', 'MATRICULA_FINAL', 'NOME_FINAL']).agg(
-        {'HORAS_PROD': 'sum', 'HORAS_IMPROD': 'sum', 'HORAS_DEC': 'sum', 'H_REAL_LIQ': 'sum'}).reset_index()
-
-    df_rank['PCT_APONTADO'] = np.where(df_rank['H_REAL_LIQ'] > 0, (df_rank['HORAS_DEC'] / df_rank['H_REAL_LIQ']) * 100,
-                                       0).clip(max=100)
-    df_rank['EFI_PROD'] = np.where(df_rank['HORAS_DEC'] > 0, (df_rank['HORAS_PROD'] / df_rank['HORAS_DEC']) * 100,
-                                   0).clip(max=100)
-
-    df_rank = df_rank.sort_values(['SETOR', 'GESTOR', 'HORAS_DEC'], ascending=[True, True, True])
-
-    if not df_rank.empty:
-        altura_dinamica_grafico = max(500, len(df_rank) * 28)
-        fig_rank = go.Figure()
-        fig_rank.add_trace(
-            go.Bar(y=df_rank['NOME_FINAL'] + ' (' + df_rank['SETOR'].str.slice(0, 10) + ')', x=df_rank['HORAS_PROD'],
-                   name='Produtivo', orientation='h', marker=dict(color='#22C55E')))
-        fig_rank.add_trace(
-            go.Bar(y=df_rank['NOME_FINAL'] + ' (' + df_rank['SETOR'].str.slice(0, 10) + ')', x=df_rank['HORAS_IMPROD'],
-                   name='Improdutivo', orientation='h', marker=dict(color='#F59E0B')))
-        fig_rank.update_layout(barmode='stack', height=altura_dinamica_grafico, margin=dict(l=10, r=10, t=30, b=10),
-                               legend=dict(orientation="h", yanchor="bottom", y=-0.05, xanchor="center", x=0.5))
-        st.plotly_chart(fig_rank, use_container_width=True)
-
-        st.markdown("###### 📋 Tabela Detalhada de Desempenho")
-
-        df_rank_table = df_rank.copy()
-        df_rank_table['FOTO'] = df_rank_table['MATRICULA_FINAL'].apply(get_foto_base64)
-
-        # Inteligência de Média do Setor
-        media_equipe = df_rank_table.groupby('SETOR')['PCT_APONTADO'].transform('mean')
-        condicoes = [
-            df_rank_table['PCT_APONTADO'] >= media_equipe + 5,
-            df_rank_table['PCT_APONTADO'] <= media_equipe - 5
-        ]
-        df_rank_table['TENDENCIA'] = np.select(condicoes, ['🟢 ↑ Acima', '🔴 ↓ Abaixo'], default='🟡 ↔ Média')
-
-        st.dataframe(
-            df_rank_table[
-                ['FOTO', 'NOME_FINAL', 'SETOR', 'GESTOR', 'HORAS_PROD', 'HORAS_DEC', 'PCT_APONTADO', 'TENDENCIA']],
-            column_config={
-                "FOTO": st.column_config.ImageColumn("Foto", width="small"),
-                "NOME_FINAL": "Colaborador",
-                "SETOR": "Setor",
-                "GESTOR": "Gestor",
-                "HORAS_PROD": st.column_config.NumberColumn("Produtivo", format="%.1f h"),
-                "HORAS_DEC": st.column_config.NumberColumn("Total PIMS", format="%.1f h"),
-                "PCT_APONTADO": st.column_config.ProgressColumn("% Apontado", format="%.1f%%", min_value=0,
-                                                                max_value=100),
-                "TENDENCIA": "vs Média Equipe"
-            },
-            hide_index=True,
-            use_container_width=True
-        )
-
-with tab_ofensores:
-    st.markdown("##### 🚨 Top Ofensores (Baixo Engajamento)")
-    st.caption(
-        "Colaboradores com menos de 75% da jornada apontada no PIMS. Requer atenção imediata do RH/Gestor para correção.")
-
-    df_ofensores = df_view.groupby(['MATRICULA_FINAL', 'NOME_FINAL', 'SETOR', 'GESTOR']).agg({
-        'HORAS_DEC': 'sum', 'H_REAL_LIQ': 'sum'
-    }).reset_index()
-
-    df_ofensores['PCT_APONTADO'] = np.where(df_ofensores['H_REAL_LIQ'] > 0,
-                                            (df_ofensores['HORAS_DEC'] / df_ofensores['H_REAL_LIQ']) * 100, 0).clip(
-        max=100)
-    df_ofensores = df_ofensores[(df_ofensores['PCT_APONTADO'] < 75) & (df_ofensores['H_REAL_LIQ'] > 0)]
-    df_ofensores = df_ofensores.sort_values('PCT_APONTADO', ascending=True)
-
-    if not df_ofensores.empty:
-        df_ofensores['FOTO'] = df_ofensores['MATRICULA_FINAL'].apply(get_foto_base64)
-        df_ofensores['PERDA_HORAS'] = df_ofensores['H_REAL_LIQ'] - df_ofensores['HORAS_DEC']
-
-        st.dataframe(
-            df_ofensores[
-                ['FOTO', 'NOME_FINAL', 'SETOR', 'GESTOR', 'H_REAL_LIQ', 'HORAS_DEC', 'PERDA_HORAS', 'PCT_APONTADO']],
-            column_config={
-                "FOTO": st.column_config.ImageColumn("Foto", width="small"),
-                "NOME_FINAL": "Colaborador",
-                "SETOR": "Setor",
-                "GESTOR": "Gestor",
-                "H_REAL_LIQ": st.column_config.NumberColumn("Jornada RH", format="%.1f h"),
-                "HORAS_DEC": st.column_config.NumberColumn("Apontado PIMS", format="%.1f h"),
-                "PERDA_HORAS": st.column_config.NumberColumn("Horas Sem Apontamento", format="%.1f h"),
-                "PCT_APONTADO": st.column_config.ProgressColumn("% Engajamento", format="%.1f%%", min_value=0,
-                                                                max_value=100)
-            },
-            hide_index=True,
-            use_container_width=True
-        )
-    else:
-        st.success("Excelente! Nenhum colaborador com engajamento crítico (< 75%) neste período.")
-
-with tab_improd:
-    st.markdown("##### 📉 Raio-X da Improdutividade")
-    st.caption("Detalhamento de onde o tempo improdutivo foi gasto baseado nos filtros ativos no momento.")
-
-    df_improd_global = st.session_state.get('dataset_improd', pd.DataFrame())
-    if not df_improd_global.empty and not df_view.empty:
-        valid_keys = df_view[['MATRICULA_FINAL', 'DT_REF']].drop_duplicates()
-        valid_keys.columns = ['MATRICULA', 'DT_REF']
-        improd_filtered = pd.merge(df_improd_global, valid_keys, on=['MATRICULA', 'DT_REF'], how='inner')
-
-        if not improd_filtered.empty:
-            improd_agrupado = improd_filtered.groupby('OPERACAO_NOME')['HORAS_DEC'].sum().reset_index().sort_values(
-                'HORAS_DEC', ascending=False)
-
-            c_chart, c_table = st.columns([1.5, 1])
-            with c_chart:
-                fig_pie = px.pie(improd_agrupado, values='HORAS_DEC', names='OPERACAO_NOME', hole=0.4,
-                                 color_discrete_sequence=px.colors.qualitative.Pastel)
-                fig_pie.update_layout(margin=dict(t=20, b=20, l=10, r=10))
-                st.plotly_chart(fig_pie, use_container_width=True)
-            with c_table:
-                st.dataframe(improd_agrupado, column_config={"OPERACAO_NOME": "Motivo (Operação PIMS)",
-                                                             "HORAS_DEC": st.column_config.NumberColumn(
-                                                                 "Total de Horas", format="%.1f h")}, hide_index=True,
-                             use_container_width=True)
+        if "Eficiência" in criterio_ranking:
+            df_gestao_ui = df_gestao_ui.sort_values(by=['EFI_PROD', 'HORAS_VALIDAS'], ascending=[False, False])
+        elif "Volume" in criterio_ranking:
+            df_gestao_ui = df_gestao_ui.sort_values(by=['HORAS_DEC', 'EFI_PROD'], ascending=[False, False])
         else:
-            st.info("Nenhuma hora improdutiva registrada para as pessoas filtradas neste período.")
-    else:
-        st.info("Sem dados de improdutividade na base atual.")
+            df_gestao_ui = df_gestao_ui.sort_values(by=['HORAS_VALIDAS', 'EFI_PROD'], ascending=[False, False])
 
-with tab_matriz:
-    st.markdown("##### 🗓️ Matriz de Eficiência por Dia do Mês (%)")
-    st.caption(
-        "Verde: >=85% | Amarelo: 70 a 84% | Vermelho: <70% | 🟠 **Laranja: Falta de Apontamento** | 🟣 **Roxo: >100% Super-Apontamento** | Cinza Claro: Folga.")
+        if not df_gestao_ui.empty:
+            st.markdown("###### 📍 Mapa de Posicionamento da Liderança")
+            fig_gestao = px.scatter(
+                df_gestao_ui, x='PCT_VISUAL', y='EFI_PROD', color='GESTOR', size='HORAS_VALIDAS',
+                hover_name='GESTOR', hover_data={'SETOR': True, 'PCT_VISUAL': ':.1f', 'EFI_PROD': ':.1f'},
+                labels={'PCT_VISUAL': '% Engajamento (Apontado)', 'EFI_PROD': '% Eficiência Produtiva',
+                        'HORAS_VALIDAS': 'Horas Válidas'},
+                title="Engajamento vs Eficiência (O tamanho da bolha é o volume de horas)"
+            )
+            fig_gestao.add_hline(y=80, line_dash="dot", line_color="red", opacity=0.5)
+            fig_gestao.add_vline(x=85, line_dash="dot", line_color="red", opacity=0.5)
+            fig_gestao.update_layout(margin=dict(l=0, r=0, t=30, b=0), height=350)
+            st.plotly_chart(fig_gestao, use_container_width=True)
 
-    if not df_view.empty:
-        df_matriz = df_view.copy()
-        df_matriz['MATRIZ_VAL'] = df_matriz['EFICIENCIA_VISUAL']
-        mask_falta = (df_matriz['STATUS'] == 'CRÍTICO (Sem Apontamento)')
-        mask_super = (df_matriz['STATUS'] == 'ALERTA (Super-Apontamento)')
-        df_matriz.loc[mask_falta, 'MATRIZ_VAL'] = -1
-        df_matriz.loc[mask_super, 'MATRIZ_VAL'] = -2
+            st.markdown("---")
+            st.markdown("###### 🏆 Pódio da Gestão (Top 3)")
 
-        pivot_ui = df_matriz.pivot_table(index=['SETOR', 'MATRICULA_FINAL', 'NOME_FINAL'], columns='DT_REF',
-                                         values='MATRIZ_VAL',
-                                         aggfunc='mean').reset_index()
+            top3 = df_gestao_ui.head(3).to_dict('records')
+            cols_podio = st.columns(3)
 
-        novas_cols = []
-        date_cols = []
-        for c in pivot_ui.columns:
-            if isinstance(c, datetime) or hasattr(c, 'strftime'):
-                col_str = c.strftime('%d/%m')
-                novas_cols.append(col_str)
-                date_cols.append(col_str)
+            medalhas = ['🥇', '🥈', '🥉']
+            cores_medalha = ['#FEFCE8', '#F8FAFC', '#FFF7ED']
+            bordas_medalha = ['#FABF24', '#94A3B8', '#B45309']
+
+            for i, row in enumerate(top3):
+                with cols_podio[i]:
+                    with st.container(border=True):
+                        gestor_nome = str(row['GESTOR']).strip()
+                        setor_nome = str(row['SETOR']).strip()
+                        icone = get_sector_icon(setor_nome)
+
+                        if "Eficiência" in criterio_ranking:
+                            kpi_val = f"{row['EFI_PROD']:.1f}%"
+                            kpi_label = "Eficiência"
+                        elif "Volume" in criterio_ranking:
+                            kpi_val = f"{row['HORAS_DEC']:.1f}h"
+                            kpi_label = "Apontadas"
+                        else:
+                            kpi_val = f"{row['PCT_VISUAL']:.1f}%"
+                            kpi_label = "Engajamento"
+
+                        st.markdown(f"""
+                        <div style="text-align: center; padding: 10px 0;">
+                            <div style="font-size: 2.5rem;">{medalhas[i]}</div>
+                            <h3 style="margin: 5px 0 0 0; font-size: 1.2rem; color: {bordas_medalha[i]};">{gestor_nome}</h3>
+                            <p style="margin: 0; color: #64748B; font-size: 0.85rem;">{icone} {setor_nome}</p>
+                            <div style="margin-top: 15px; padding: 10px; background-color: {cores_medalha[i]}; border-radius: 8px; border: 1px solid {bordas_medalha[i]}50;">
+                                <div style="font-size: 1.5rem; font-weight: 800; color: {bordas_medalha[i]};">{kpi_val}</div>
+                                <div style="font-size: 0.75rem; text-transform: uppercase; font-weight: 600; color: #475569;">{kpi_label}</div>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+            st.markdown("---")
+            st.markdown("###### 📋 Tabela Completa de Classificação")
+
+            df_gestao_table = df_gestao_ui.copy()
+            df_gestao_table.insert(0, 'Rank', range(1, len(df_gestao_table) + 1))
+            df_gestao_table['SETOR_ICON'] = df_gestao_table['SETOR'].apply(get_sector_icon) + " " + df_gestao_table[
+                'SETOR']
+
+            st.dataframe(
+                df_gestao_table[['Rank', 'GESTOR', 'SETOR_ICON', 'HORAS_DEC', 'H_REAL_LIQ', 'PCT_VISUAL', 'EFI_PROD']],
+                column_config={
+                    "Rank": st.column_config.NumberColumn("🏆", width="small"),
+                    "GESTOR": st.column_config.TextColumn("Gestor", width="medium"),
+                    "SETOR_ICON": st.column_config.TextColumn("Setor", width="medium"),
+                    "HORAS_DEC": st.column_config.NumberColumn("Volume PIMS", format="%.1f h"),
+                    "H_REAL_LIQ": st.column_config.NumberColumn("Jornada RH", format="%.1f h"),
+                    "PCT_VISUAL": st.column_config.ProgressColumn("Engajamento", format="%.1f%%", min_value=0,
+                                                                  max_value=100),
+                    "EFI_PROD": st.column_config.ProgressColumn("Eficiência", format="%.1f%%", min_value=0,
+                                                                max_value=100)
+                },
+                hide_index=True,
+                use_container_width=True
+            )
+        else:
+            st.info("Não há dados de gestores suficientes para este período.")
+
+    with tab_rank:
+        st.markdown("##### 🏅 Desempenho Geral por Colaborador")
+        df_rank = df_view.groupby(['SETOR', 'GESTOR', 'MATRICULA_FINAL', 'NOME_FINAL']).agg(
+            {'HORAS_PROD': 'sum', 'HORAS_IMPROD': 'sum', 'HORAS_DEC': 'sum', 'H_REAL_LIQ': 'sum'}).reset_index()
+
+        df_rank['PCT_APONTADO'] = np.where(df_rank['H_REAL_LIQ'] > 0,
+                                           (df_rank['HORAS_DEC'] / df_rank['H_REAL_LIQ']) * 100, 0).clip(max=100)
+        df_rank['EFI_PROD'] = np.where(df_rank['HORAS_DEC'] > 0, (df_rank['HORAS_PROD'] / df_rank['HORAS_DEC']) * 100,
+                                       0).clip(max=100)
+
+        df_rank = df_rank.sort_values(['SETOR', 'GESTOR', 'HORAS_DEC'], ascending=[True, True, True])
+
+        if not df_rank.empty:
+            altura_dinamica_grafico = max(500, len(df_rank) * 28)
+            fig_rank = go.Figure()
+            fig_rank.add_trace(
+                go.Bar(y=df_rank['NOME_FINAL'] + ' (' + df_rank['SETOR'].str.slice(0, 10) + ')',
+                       x=df_rank['HORAS_PROD'],
+                       name='Produtivo', orientation='h', marker=dict(color='#22C55E')))
+            fig_rank.add_trace(
+                go.Bar(y=df_rank['NOME_FINAL'] + ' (' + df_rank['SETOR'].str.slice(0, 10) + ')',
+                       x=df_rank['HORAS_IMPROD'],
+                       name='Improdutivo', orientation='h', marker=dict(color='#F59E0B')))
+            fig_rank.update_layout(barmode='stack', height=altura_dinamica_grafico, margin=dict(l=10, r=10, t=30, b=10),
+                                   legend=dict(orientation="h", yanchor="bottom", y=-0.05, xanchor="center", x=0.5))
+            st.plotly_chart(fig_rank, use_container_width=True)
+
+            st.markdown("###### 📋 Tabela Detalhada de Desempenho")
+
+            df_rank_table = df_rank.copy()
+            df_rank_table['FOTO'] = df_rank_table['MATRICULA_FINAL'].apply(get_foto_base64)
+
+            media_equipe = df_rank_table.groupby('SETOR')['PCT_APONTADO'].transform('mean')
+            condicoes = [
+                df_rank_table['PCT_APONTADO'] >= media_equipe + 5,
+                df_rank_table['PCT_APONTADO'] <= media_equipe - 5
+            ]
+            df_rank_table['TENDENCIA'] = np.select(condicoes, ['🟢 ↑ Acima', '🔴 ↓ Abaixo'], default='🟡 ↔ Média')
+
+            st.dataframe(
+                df_rank_table[
+                    ['FOTO', 'NOME_FINAL', 'SETOR', 'GESTOR', 'HORAS_PROD', 'HORAS_DEC', 'PCT_APONTADO', 'TENDENCIA']],
+                column_config={
+                    "FOTO": st.column_config.ImageColumn("Foto", width="small"),
+                    "NOME_FINAL": "Colaborador",
+                    "SETOR": "Setor",
+                    "GESTOR": "Gestor",
+                    "HORAS_PROD": st.column_config.NumberColumn("Produtivo", format="%.1f h"),
+                    "HORAS_DEC": st.column_config.NumberColumn("Total PIMS", format="%.1f h"),
+                    "PCT_APONTADO": st.column_config.ProgressColumn("% Apontado", format="%.1f%%", min_value=0,
+                                                                    max_value=100),
+                    "TENDENCIA": "vs Média Equipe"
+                },
+                hide_index=True,
+                use_container_width=True
+            )
+
+    with tab_ofensores:
+        st.markdown("##### 🚨 Top Ofensores (Baixo Engajamento)")
+        st.caption(
+            "Colaboradores com menos de 75% da jornada apontada no PIMS. Requer atenção imediata do RH/Gestor para correção.")
+
+        df_ofensores = df_view.groupby(['MATRICULA_FINAL', 'NOME_FINAL', 'SETOR', 'GESTOR']).agg({
+            'HORAS_DEC': 'sum', 'H_REAL_LIQ': 'sum'
+        }).reset_index()
+
+        df_ofensores['PCT_APONTADO'] = np.where(df_ofensores['H_REAL_LIQ'] > 0,
+                                                (df_ofensores['HORAS_DEC'] / df_ofensores['H_REAL_LIQ']) * 100, 0).clip(
+            max=100)
+        df_ofensores = df_ofensores[(df_ofensores['PCT_APONTADO'] < 75) & (df_ofensores['H_REAL_LIQ'] > 0)]
+        df_ofensores = df_ofensores.sort_values('PCT_APONTADO', ascending=True)
+
+        if not df_ofensores.empty:
+            df_ofensores['FOTO'] = df_ofensores['MATRICULA_FINAL'].apply(get_foto_base64)
+            df_ofensores['PERDA_HORAS'] = df_ofensores['H_REAL_LIQ'] - df_ofensores['HORAS_DEC']
+
+            st.dataframe(
+                df_ofensores[['FOTO', 'NOME_FINAL', 'SETOR', 'GESTOR', 'H_REAL_LIQ', 'HORAS_DEC', 'PERDA_HORAS',
+                              'PCT_APONTADO']],
+                column_config={
+                    "FOTO": st.column_config.ImageColumn("Foto", width="small"),
+                    "NOME_FINAL": "Colaborador",
+                    "SETOR": "Setor",
+                    "GESTOR": "Gestor",
+                    "H_REAL_LIQ": st.column_config.NumberColumn("Jornada RH", format="%.1f h"),
+                    "HORAS_DEC": st.column_config.NumberColumn("Apontado PIMS", format="%.1f h"),
+                    "PERDA_HORAS": st.column_config.NumberColumn("Horas Sem Apontamento", format="%.1f h"),
+                    "PCT_APONTADO": st.column_config.ProgressColumn("% Engajamento", format="%.1f%%", min_value=0,
+                                                                    max_value=100)
+                },
+                hide_index=True,
+                use_container_width=True
+            )
+        else:
+            st.success("Excelente! Nenhum colaborador com engajamento crítico (< 75%) neste período.")
+
+    with tab_improd:
+        st.markdown("##### 📉 Raio-X da Improdutividade")
+        st.caption("Detalhamento de onde o tempo improdutivo foi gasto baseado nos filtros ativos no momento.")
+
+        df_improd_global = st.session_state.get('dataset_improd', pd.DataFrame())
+        if not df_improd_global.empty and not df_view.empty:
+            valid_keys = df_view[['MATRICULA_FINAL', 'DT_REF']].drop_duplicates()
+            valid_keys.columns = ['MATRICULA', 'DT_REF']
+            improd_filtered = pd.merge(df_improd_global, valid_keys, on=['MATRICULA', 'DT_REF'], how='inner')
+
+            if not improd_filtered.empty:
+                improd_agrupado = improd_filtered.groupby('OPERACAO_NOME')['HORAS_DEC'].sum().reset_index().sort_values(
+                    'HORAS_DEC', ascending=False)
+
+                c_chart, c_table = st.columns([1.5, 1])
+                with c_chart:
+                    fig_pie = px.pie(improd_agrupado, values='HORAS_DEC', names='OPERACAO_NOME', hole=0.4,
+                                     color_discrete_sequence=px.colors.qualitative.Pastel)
+                    fig_pie.update_layout(margin=dict(t=20, b=20, l=10, r=10))
+                    st.plotly_chart(fig_pie, use_container_width=True)
+                with c_table:
+                    st.dataframe(improd_agrupado, column_config={"OPERACAO_NOME": "Motivo (Operação PIMS)",
+                                                                 "HORAS_DEC": st.column_config.NumberColumn(
+                                                                     "Total de Horas", format="%.1f h")},
+                                 hide_index=True,
+                                 use_container_width=True)
             else:
-                novas_cols.append(str(c))
-        pivot_ui.columns = novas_cols
+                st.info("Nenhuma hora improdutiva registrada para as pessoas filtradas neste período.")
+        else:
+            st.info("Sem dados de improdutividade na base atual.")
 
-        pivot_ui.insert(0, 'FOTO', pivot_ui['MATRICULA_FINAL'].apply(get_foto_base64))
+    with tab_matriz:
+        st.markdown("##### 🗓️ Matriz de Eficiência por Dia do Mês (%)")
+        st.caption(
+            "Verde: >=85% | Amarelo: 70 a 84% | Vermelho: <70% | 🟠 **Laranja: Falta de Apontamento** | 🟣 **Roxo: >100% Super-Apontamento** | Cinza Claro: Folga.")
+
+        if not df_view.empty:
+            df_matriz = df_view.copy()
+            df_matriz['MATRIZ_VAL'] = df_matriz['EFICIENCIA_VISUAL']
+            mask_falta = (df_matriz['STATUS'] == 'CRÍTICO (Sem Apontamento)')
+            mask_super = (df_matriz['STATUS'] == 'ALERTA (Super-Apontamento)')
+            df_matriz.loc[mask_falta, 'MATRIZ_VAL'] = -1
+            df_matriz.loc[mask_super, 'MATRIZ_VAL'] = -2
+
+            pivot_ui = df_matriz.pivot_table(index=['SETOR', 'MATRICULA_FINAL', 'NOME_FINAL'], columns='DT_REF',
+                                             values='MATRIZ_VAL',
+                                             aggfunc='mean').reset_index()
+
+            novas_cols = []
+            date_cols = []
+            for c in pivot_ui.columns:
+                if isinstance(c, datetime) or hasattr(c, 'strftime'):
+                    col_str = c.strftime('%d/%m')
+                    novas_cols.append(col_str)
+                    date_cols.append(col_str)
+                else:
+                    novas_cols.append(str(c))
+            pivot_ui.columns = novas_cols
+
+            pivot_ui.insert(0, 'FOTO', pivot_ui['MATRICULA_FINAL'].apply(get_foto_base64))
 
 
-        def color_efficiency(val):
-            if pd.isna(val) or val == 0: return 'background-color: #F3F4F6; color: #9CA3AF;'
-            if val == -1: return 'background-color: #FED7AA; color: #9A3412; font-weight: bold;'
-            if val == -2: return 'background-color: #E9D5FF; color: #6B21A8; font-weight: bold;'
-            if val >= 85: return 'background-color: #BBF7D0; color: #166534; font-weight: bold;'
-            if val >= 70: return 'background-color: #FEF08A; color: #A16207; font-weight: bold;'
-            return 'background-color: #FECACA; color: #991B1B; font-weight: bold;'
+            def color_efficiency(val):
+                if pd.isna(val) or val == 0: return 'background-color: #F3F4F6; color: #9CA3AF;'
+                if val == -1: return 'background-color: #FED7AA; color: #9A3412; font-weight: bold;'
+                if val == -2: return 'background-color: #E9D5FF; color: #6B21A8; font-weight: bold;'
+                if val >= 85: return 'background-color: #BBF7D0; color: #166534; font-weight: bold;'
+                if val >= 70: return 'background-color: #FEF08A; color: #A16207; font-weight: bold;'
+                return 'background-color: #FECACA; color: #991B1B; font-weight: bold;'
 
 
-        def format_val(val):
-            if pd.isna(val) or val == 0: return "-"
-            if val == -1: return "0"
-            if val == -2: return ">100"
-            return f"{val:.0f}"
+            def format_val(val):
+                if pd.isna(val) or val == 0: return "-"
+                if val == -1: return "0"
+                if val == -2: return ">100"
+                return f"{val:.0f}"
 
 
-        try:
-            styled_df = pivot_ui.style.map(color_efficiency, subset=date_cols).format(format_val, subset=date_cols)
-        except AttributeError:
-            styled_df = pivot_ui.style.applymap(color_efficiency, subset=date_cols).format(format_val, subset=date_cols)
+            try:
+                styled_df = pivot_ui.style.map(color_efficiency, subset=date_cols).format(format_val, subset=date_cols)
+            except AttributeError:
+                styled_df = pivot_ui.style.applymap(color_efficiency, subset=date_cols).format(format_val,
+                                                                                               subset=date_cols)
 
-        st.dataframe(styled_df, use_container_width=True, height=600, hide_index=True, column_config={
-            "FOTO": st.column_config.ImageColumn("Foto", width="small"),
-            "MATRICULA_FINAL": None,
-            "NOME_FINAL": "Colaborador",
-            "SETOR": "Setor"
+            st.dataframe(styled_df, use_container_width=True, height=600, hide_index=True, column_config={
+                "FOTO": st.column_config.ImageColumn("Foto", width="small"),
+                "MATRICULA_FINAL": None,
+                "NOME_FINAL": "Colaborador",
+                "SETOR": "Setor"
+            })
+        else:
+            st.info("Sem dados para renderizar a matriz de calendário.")
+
+    with tab_refeicao:
+        st.markdown("##### 🍔 Matriz de Auditoria de Refeição")
+        st.caption(
+            "Verde: Apontou Refeição | Vermelho: Falha (Trabalhou > 4h e não apontou) | Cinza: Sem Obrigação / Folga")
+
+        df_ref_ui = df_ref_dados.copy()
+
+        if not df_ref_ui.empty:
+            def get_ref_val_ui(r):
+                if r['APONTOU_REFEICAO'] == 'Sim': return 1
+                if r['H_REAL_LIQ'] > 4.0 and r['APONTOU_REFEICAO'] == 'Não': return -1
+                return 0
+
+
+            df_ref_ui['REF_VAL'] = df_ref_ui.apply(get_ref_val_ui, axis=1)
+            pivot_ref_ui = df_ref_ui.pivot_table(index=['SETOR', 'MATRICULA_FINAL', 'NOME_FINAL'], columns='DT_REF',
+                                                 values='REF_VAL', aggfunc='min').reset_index()
+
+            novas_cols_ref = []
+            date_cols_ref = []
+            for c in pivot_ref_ui.columns:
+                if isinstance(c, datetime) or hasattr(c, 'strftime'):
+                    col_str = c.strftime('%d/%m')
+                    novas_cols_ref.append(col_str)
+                    date_cols_ref.append(col_str)
+                else:
+                    novas_cols_ref.append(str(c))
+            pivot_ref_ui.columns = novas_cols_ref
+
+            pivot_ref_ui.insert(0, 'FOTO', pivot_ref_ui['MATRICULA_FINAL'].apply(get_foto_base64))
+
+
+            def color_ref(val):
+                if pd.isna(val) or val == 0: return 'background-color: #F3F4F6; color: #9CA3AF;'
+                if val == 1: return 'background-color: #BBF7D0; color: #166534; font-weight: bold;'
+                if val == -1: return 'background-color: #FECACA; color: #991B1B; font-weight: bold;'
+                return ''
+
+
+            def format_ref(val):
+                if pd.isna(val) or val == 0: return "-"
+                if val == 1: return "Sim"
+                if val == -1: return "Não"
+                return ""
+
+
+            try:
+                styled_ref_df = pivot_ref_ui.style.map(color_ref, subset=date_cols_ref).format(format_ref,
+                                                                                               subset=date_cols_ref)
+            except AttributeError:
+                styled_ref_df = pivot_ref_ui.style.applymap(color_ref, subset=date_cols_ref).format(format_ref,
+                                                                                                    subset=date_cols_ref)
+
+            st.dataframe(styled_ref_df, use_container_width=True, height=600, hide_index=True, column_config={
+                "FOTO": st.column_config.ImageColumn("Foto", width="small"),
+                "MATRICULA_FINAL": None,
+                "NOME_FINAL": "Colaborador",
+                "SETOR": "Setor"
+            })
+        else:
+            st.info("Sem dados para renderizar a matriz de refeição com os setores filtrados.")
+
+    with tab_dados:
+        st.markdown("##### 🔍 Extração Analítica")
+        colunas_exibicao = ['DT_REF', 'SETOR', 'NOME_FINAL', 'GESTOR', 'ESC_H', 'REAL_H', 'H_REAL_LIQ', 'HORAS_DEC',
+                            'HORAS_PROD', 'HORAS_IMPROD', 'APONTOU_REFEICAO', 'FALTA_REFEICAO', 'EFICIENCIA_GERAL',
+                            'STATUS']
+        st.dataframe(df_view[colunas_exibicao], use_container_width=True, column_config={
+            "DT_REF": st.column_config.DateColumn("Data", format="DD/MM/YYYY"),
+            "SETOR": st.column_config.TextColumn("Equipe / Setor", width="medium"),
+            "NOME_FINAL": st.column_config.TextColumn("Colaborador", width="medium"),
+            "GESTOR": st.column_config.TextColumn("Gestor", width="medium"),
+            "ESC_H": st.column_config.TextColumn("Escala Programada"),
+            "REAL_H": st.column_config.TextColumn("Jornada Realizada"),
+            "H_REAL_LIQ": st.column_config.NumberColumn("Horas Pagas", format="%.1f"),
+            "HORAS_DEC": st.column_config.NumberColumn("Total PIMS", format="%.1f"),
+            "HORAS_PROD": st.column_config.NumberColumn("Produtivas", format="%.1f"),
+            "HORAS_IMPROD": st.column_config.NumberColumn("Improdutivas", format="%.1f"),
+            "EFICIENCIA_GERAL": st.column_config.ProgressColumn("Efic. (%)", format="%.0f%%", min_value=0,
+                                                                max_value=100),
+            "APONTOU_REFEICAO": st.column_config.TextColumn("Refeição Diária?"),
+            "FALTA_REFEICAO": st.column_config.NumberColumn("Alerta S/ Refeicao", format="%d"),
+            "STATUS": st.column_config.TextColumn("Status")
         })
-    else:
-        st.info("Sem dados para renderizar a matriz de calendário.")
 
-with tab_dados:
-    st.markdown("##### 🔍 Extração Analítica")
-    colunas_exibicao = ['DT_REF', 'SETOR', 'NOME_FINAL', 'GESTOR', 'ESC_H', 'REAL_H', 'H_REAL_LIQ', 'HORAS_DEC',
-                        'HORAS_PROD', 'HORAS_IMPROD', 'APONTOU_REFEICAO', 'FALTA_REFEICAO', 'EFICIENCIA_GERAL',
-                        'STATUS']
-    st.dataframe(df_view[colunas_exibicao], use_container_width=True, column_config={
-        "DT_REF": st.column_config.DateColumn("Data", format="DD/MM/YYYY"),
-        "SETOR": st.column_config.TextColumn("Equipe / Setor", width="medium"),
-        "NOME_FINAL": st.column_config.TextColumn("Colaborador", width="medium"),
-        "GESTOR": st.column_config.TextColumn("Gestor", width="medium"),
-        "ESC_H": st.column_config.TextColumn("Escala Programada"),
-        "REAL_H": st.column_config.TextColumn("Jornada Realizada"),
-        "H_REAL_LIQ": st.column_config.NumberColumn("Horas Pagas", format="%.1f"),
-        "HORAS_DEC": st.column_config.NumberColumn("Total PIMS", format="%.1f"),
-        "HORAS_PROD": st.column_config.NumberColumn("Produtivas", format="%.1f"),
-        "HORAS_IMPROD": st.column_config.NumberColumn("Improdutivas", format="%.1f"),
-        "EFICIENCIA_GERAL": st.column_config.ProgressColumn("Efic. (%)", format="%.0f%%", min_value=0, max_value=100),
-        "APONTOU_REFEICAO": st.column_config.TextColumn("Refeição Diária?"),
-        "FALTA_REFEICAO": st.column_config.NumberColumn("Alerta S/ Refeicao", format="%d"),
-        "STATUS": st.column_config.TextColumn("Status")
-    })
+    # ==============================================================================
+    # IMPRESSÃO E RELATÓRIOS
+    # ==============================================================================
+    st.markdown("---")
+    st.markdown("### 🖨️ Relatórios Executivos")
+    st.caption("Exporte a análise cruzada num formato PDF otimizado (A4 deitado ou em pé) para apresentar à diretoria.")
 
-# ==============================================================================
-# IMPRESSÃO E RELATÓRIOS
-# ==============================================================================
-st.markdown("---")
-st.markdown("### 🖨️ Relatórios Executivos")
-st.caption("Exporte a análise cruzada num formato PDF otimizado (A4 deitado ou em pé) para apresentar à diretoria.")
+    orientacao_ui = st.radio("Orientação do PDF:", ["Paisagem (Deitado)", "Retrato (Em pé)"], horizontal=True,
+                             label_visibility="collapsed")
+    orientacao_escolhida = 'L' if 'Paisagem' in orientacao_ui else 'P'
 
-orientacao_ui = st.radio("Orientação do PDF:", ["Paisagem (Deitado)", "Retrato (Em pé)"], horizontal=True,
-                         label_visibility="collapsed")
-orientacao_escolhida = 'L' if 'Paisagem' in orientacao_ui else 'P'
+    with st.spinner("Desenhando gráficos e compilando PDF..."):
+        df_improd_global = st.session_state.get('dataset_improd', pd.DataFrame())
 
-with st.spinner("Desenhando gráficos e compilando PDF..."):
-    df_improd_global = st.session_state.get('dataset_improd', pd.DataFrame())
+        excel_bytes, pdf_bytes = processar_e_gerar_relatorios_eficiencia(
+            df_view,
+            df_improd_global,
+            d_in, d_out,
+            df_espelho,
+            df_ref_dados,
+            orientacao_pdf=orientacao_escolhida,
+            criterio_ranking=criterio_ranking
+        )
 
-    excel_bytes, pdf_bytes = processar_e_gerar_relatorios_eficiencia(
-        df_view,
-        df_improd_global,
-        d_in, d_out,
-        df_espelho,
-        orientacao_pdf=orientacao_escolhida,
-        criterio_ranking=criterio_ranking
-    )
+    nome_padrao_arquivo = f"Auditoria_PeopleAnalytics_{d_in.strftime('%d%m%y')}_a_{d_out.strftime('%d%m%y')}"
 
-nome_padrao_arquivo = f"Auditoria_PeopleAnalytics_{d_in.strftime('%d%m%y')}_a_{d_out.strftime('%d%m%y')}"
-
-c_pdf, c_excel = st.columns(2)
-with c_pdf:
-    st.download_button(label="📄 Descarregar Relatório PDF", data=pdf_bytes, file_name=f"{nome_padrao_arquivo}.pdf",
-                       mime="application/pdf", type="primary", use_container_width=True)
-with c_excel:
-    st.download_button(label="📊 Descarregar Tabela Excel", data=excel_bytes, file_name=f"{nome_padrao_arquivo}.xlsx",
-                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                       use_container_width=True)
+    c_pdf, c_excel = st.columns(2)
+    with c_pdf:
+        st.download_button(label="📄 Descarregar Relatório PDF", data=pdf_bytes, file_name=f"{nome_padrao_arquivo}.pdf",
+                           mime="application/pdf", type="primary", use_container_width=True)
+    with c_excel:
+        st.download_button(label="📊 Descarregar Tabela Excel", data=excel_bytes,
+                           file_name=f"{nome_padrao_arquivo}.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                           use_container_width=True)
