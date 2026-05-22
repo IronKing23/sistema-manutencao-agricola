@@ -7,297 +7,259 @@ from datetime import datetime
 # --- BLINDAGEM DE IMPORTAÇÃO ---
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from database import get_db_connection
-from utils_ui import load_custom_css
-from utils_icons import get_icon
+try:
+    from database import get_db_connection
+    from utils_ui import load_custom_css
+    from utils_icons import get_icon
+except ImportError:
+    pass
 
-# --- 1. CONFIGURAÇÃO VISUAL (CLEAN & BOLD) ---
+# --- 1. CONFIGURAÇÃO VISUAL PREMIUM ---
 load_custom_css()
 
 st.markdown("""
 <style>
-    /* REMOVE ESPAÇOS DO TOPO */
-    .block-container {
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
+
+    .main .block-container {
         padding-top: 2rem !important;
-        padding-bottom: 2rem !important;
+        max-width: 1200px;
+        font-family: 'Inter', sans-serif;
     }
 
-    /* --- ESTILO DOS CARDS (CONTAINERS) --- */
-    /* Deixa os containers com borda mais elegantes */
-    [data-testid="stVerticalBlockBorderWrapper"] {
+    .header-greeting {
+        font-size: 2rem;
+        font-weight: 800;
+        color: var(--text-color);
+        margin-bottom: 0.2rem;
+        letter-spacing: -0.5px;
+    }
+    .header-date {
+        font-size: 1rem;
+        color: #888888;
+        margin-bottom: 2rem;
+    }
+
+    .kpi-card {
+        background-color: var(--secondary-background-color);
         border-radius: 12px;
-        background-color: var(--card-bg);
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
-        transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s;
+        padding: 22px;
+        border: 1px solid rgba(128, 128, 128, 0.1);
+        transition: all 0.3s ease;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+    }
+    .kpi-card:hover {
+        border-color: var(--primary-color);
+        transform: translateY(-2px);
+        box-shadow: 0 8px 16px rgba(0,0,0,0.05);
+    }
+    .kpi-title {
+        font-size: 0.8rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        color: #888888;
+        letter-spacing: 1px;
+        margin-bottom: 10px;
+    }
+    .kpi-value {
+        font-size: 2.5rem;
+        font-weight: 800;
+        color: var(--text-color);
+        line-height: 1;
+    }
+    .kpi-desc {
+        font-size: 0.85rem;
+        color: #666666;
+        margin-top: 8px;
     }
 
-    /* Efeito Hover Sutil no Container */
-    [data-testid="stVerticalBlockBorderWrapper"]:hover {
-        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
-        transform: translateY(-3px);
-    }
-
-    /* --- BARRA DE STATUS --- */
-    .status-banner {
-        padding: 12px 20px;
-        border-radius: 10px;
-        margin-bottom: 20px;
+    .section-title {
+        font-size: 1.2rem;
+        font-weight: 700;
+        color: var(--text-color);
+        margin-top: 3rem;
+        margin-bottom: 1.5rem;
         display: flex;
         align-items: center;
         gap: 12px;
-        font-weight: 600;
+    }
+    .section-title::after {
+        content: "";
+        flex: 1;
+        height: 1px;
+        background: rgba(128, 128, 128, 0.1);
+    }
+
+    .report-box {
+        background: rgba(128, 128, 128, 0.05);
+        border-radius: 12px;
+        padding: 15px;
+        text-align: center;
         border: 1px solid transparent;
+        transition: 0.3s;
     }
-    .status-ok { background-color: #F0FDF4; color: #166534; border-color: #BBF7D0; }
-    .status-critico { background-color: #FEF2F2; color: #991B1B; border-color: #FECACA; animation: pulse-red 2s infinite; }
-
-    /* --- TIPOGRAFIA DE IMPACTO NOS CARDS --- */
-    .kpi-title {
-        font-size: 0.9rem;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        color: #64748B;
-        margin-bottom: 8px;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-    }
-
-    .kpi-value {
-        font-size: 3.5rem;
-        font-weight: 800;
-        color: #0F172A; /* Escuro forte */
-        line-height: 1;
-        margin-bottom: 12px;
-        font-feature-settings: "tnum";
-        font-variant-numeric: tabular-nums;
-    }
-
-    /* Cores de Texto Específicas */
-    .text-red { color: #DC2626; }
-    .text-blue { color: #2563EB; }
-    .text-orange { color: #D97706; }
-    .text-green { color: #16A34A; }
-
-    /* --- BOTÕES DENTRO DOS CARDS --- */
-    /* Personaliza o botão secundário para parecer um link de ação */
-    div[data-testid="stVerticalBlock"] button[kind="secondary"] {
-        width: 100%;
-        border: 1px solid #E2E8F0;
-        background-color: transparent;
-        color: #475569;
-        font-weight: 500;
-        border-radius: 8px;
-    }
-    div[data-testid="stVerticalBlock"] button[kind="secondary"]:hover {
-        background-color: #F8FAFC;
-        border-color: #94A3B8;
-        color: #0F172A;
-    }
-
-    /* --- DARK MODE --- */
-    @media (prefers-color-scheme: dark) {
-        .kpi-title { color: #94A3B8; }
-        .kpi-value { color: #F8FAFC; }
-        .status-ok { background-color: #064E3B; color: #D1FAE5; border-color: #065F46; }
-        .status-critico { background-color: #450A0A; color: #FECACA; border-color: #7F1D1D; }
-        .text-red { color: #F87171; }
-        .text-blue { color: #60A5FA; }
-        .text-orange { color: #FBBF24; }
-        .text-green { color: #4ADE80; }
-
-        div[data-testid="stVerticalBlock"] button[kind="secondary"] {
-            border-color: #334155;
-            color: #94A3B8;
-        }
-        div[data-testid="stVerticalBlock"] button[kind="secondary"]:hover {
-            background-color: #1E293B;
-            color: #F1F5F9;
-        }
+    .report-box:hover {
+        background: rgba(128, 128, 128, 0.1);
+        border-color: var(--primary-color);
     }
 </style>
 """, unsafe_allow_html=True)
 
 
-# --- 2. DADOS (SEM CACHE) ---
-def get_data():
-    conn = get_db_connection()
+# --- 2. MOTOR DE DADOS DE ALTA PERFORMANCE (CACHE) ---
+
+# Mantém os dados na memória por 60 segundos para não sobrecarregar o Banco de Dados
+@st.cache_data(ttl=60, show_spinner=False)
+def carregar_kpis():
+    kpis = {
+        'abertas': 0, 'andamento': 0, 'aguardando': 0,
+        'pneus_ausente': 0, 'recados': 0
+    }
     try:
-        # Contadores
-        q_aberta = conn.execute("SELECT COUNT(*) FROM ordens_servico WHERE status != 'Concluído'").fetchone()[0]
-        q_parada = conn.execute(
-            "SELECT COUNT(*) FROM ordens_servico WHERE status != 'Concluído' AND maquina_parada = 1").fetchone()[0]
-        q_recados = conn.execute("SELECT COUNT(*) FROM recados").fetchone()[0]
+        conn = get_db_connection()
 
-        # Dataframes para os Popups (CORRIGIDO AQUI: 'os.id' para evitar ambiguidade)
+        # OS Segura (Conta direto pelo banco para ser mais rápido e não quebrar com DF vazio)
+        df_os = pd.read_sql("SELECT status FROM ordens_servico", conn)
+        if not df_os.empty:
+            contagem = df_os['status'].value_counts()
+            kpis['abertas'] = int(contagem.get('Aberta', 0))
+            kpis['andamento'] = int(contagem.get('Em Andamento', 0))
+            kpis['aguardando'] = int(contagem.get('Aguardando Peça', 0))
 
-        # 1. Pendências
-        df_ab = pd.read_sql("""
-            SELECT os.id, e.frota, os.descricao, os.data_hora, os.prioridade, os.status 
-            FROM ordens_servico os 
-            JOIN equipamentos e ON os.equipamento_id = e.id 
-            WHERE os.status != 'Concluído' 
-            ORDER BY os.prioridade = 'Alta' DESC, os.data_hora DESC LIMIT 20
-        """, conn)
+        # Pneus Segura
+        try:
+            df_pneus = pd.read_sql("SELECT status FROM controle_pneus_status", conn)
+            kpis['pneus_ausente'] = int(df_pneus['status'].value_counts().get('Ausente', 0))
+        except:
+            pass
 
-        # 2. Paradas
-        df_pa = pd.read_sql("""
-            SELECT os.id, e.frota, os.descricao, os.data_hora 
-            FROM ordens_servico os 
-            JOIN equipamentos e ON os.equipamento_id = e.id 
-            WHERE os.status != 'Concluído' AND os.maquina_parada = 1 
-            ORDER BY os.data_hora DESC
-        """, conn)
+        # Avisos Segura
+        try:
+            df_avisos = pd.read_sql("SELECT COUNT(*) as qtd FROM mural_avisos WHERE ativo = 1", conn)
+            kpis['recados'] = int(df_avisos.iloc[0]['qtd'])
+        except:
+            pass
 
-        return q_aberta, q_parada, q_recados, df_ab, df_pa
-    finally:
         conn.close()
+    except Exception as e:
+        pass  # Falha silenciosa elegante
+
+    return kpis
 
 
-q_aberta, q_parada, q_recados, df_aberta, df_parada = get_data()
+# Busca os dados no Cache
+dados = carregar_kpis()
 
+# --- 3. CABEÇALHO DINÂMICO ---
+nome_usuario = st.session_state.get('user_nome', 'Gestor')
+primeiro_nome = nome_usuario.split()[0]
+data_atual = datetime.now().strftime("%d de %B, %Y")
 
-# --- 3. DIALOGS (POPUPS) ---
-@st.dialog("📋 Pendências do Dia", width="large")
-def popup_pendencias():
-    if df_aberta.empty:
-        st.success("Tudo em dia! Nenhuma pendência.")
-    else:
-        st.dataframe(
-            df_aberta, use_container_width=True, hide_index=True,
-            column_config={
-                "id": st.column_config.NumberColumn("#", width="small"),
-                "frota": "Frota",
-                "prioridade": "Prio.",
-                "status": "Status",
-                "data_hora": st.column_config.DatetimeColumn("Desde", format="DD/MM HH:mm"),
-                "descricao": "Detalhe"
-            }
-        )
-        c1, c2 = st.columns([1, 2])
-        # Direciona para o Painel Geral
-        if c2.button("Ver no Painel Geral 📊", type="primary", use_container_width=True):
-            st.switch_page("pages/1_Painel_Principal.py")
-        if c1.button("Fechar", use_container_width=True):
-            st.rerun()
-
-
-@st.dialog("🚨 Máquinas Paradas", width="large")
-def popup_paradas():
-    if df_parada.empty:
-        st.success("Frota 100% Operacional!")
-    else:
-        st.error(f"{len(df_parada)} equipamentos parados impactando a operação.")
-        st.dataframe(
-            df_parada, use_container_width=True, hide_index=True,
-            column_config={
-                "id": "#",
-                "frota": "Máquina",
-                "data_hora": st.column_config.DatetimeColumn("Parada Desde", format="DD/MM HH:mm"),
-                "descricao": "Motivo"
-            }
-        )
-        # Direciona para o Painel Geral
-        if st.button("Ver no Painel Geral 📊", type="primary", use_container_width=True):
-            st.switch_page("pages/1_Painel_Principal.py")
-
-
-# --- 4. HEADER ---
-user_first_name = st.session_state.get('user_nome', 'Usuário').split()[0]
-current_date = datetime.now().strftime('%d/%m/%Y')
-
-c_head1, c_head2 = st.columns([3, 1])
+c_head1, c_head2 = st.columns([4, 1])
 with c_head1:
-    st.markdown(f"<h1 style='margin-bottom:0px;'>Olá, {user_first_name}</h1>", unsafe_allow_html=True)
-    st.caption(f"Visão Geral • {current_date}")
+    st.markdown(f'<div class="header-greeting">Bom dia, {primeiro_nome}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="header-date">{data_atual} • Status do Sistema Cedro</div>', unsafe_allow_html=True)
+with c_head2:
+    st.write("")  # Espaçamento
+    if st.button("🔄 Atualizar Painel", use_container_width=True):
+        carregar_kpis.clear()  # Limpa o cache para forçar a busca de novos dados
+        st.rerun()
 
-# --- BARRA DE STATUS ---
-if q_parada > 0:
-    st.markdown(f"""
-    <div class="status-banner status-critico">
-        <span style="font-size: 1.2rem;">🚨</span>
-        <span>ATENÇÃO: Operação com {q_parada} Máquinas Paradas</span>
-    </div>
-    """, unsafe_allow_html=True)
-else:
-    st.markdown("""
-    <div class="status-banner status-ok">
-        <span style="font-size: 1.2rem;">✅</span>
-        <span>Operação Saudável: Nenhuma Máquina Parada</span>
-    </div>
-    """, unsafe_allow_html=True)
+# --- 4. DASHBOARD (KPIs) ---
+k1, k2, k3, k4 = st.columns(4)
 
-st.markdown("<br>", unsafe_allow_html=True)
+with k1:
+    st.markdown(f"""<div class="kpi-card">
+        <div class="kpi-title">🛠️ Ativos em Reparo</div>
+        <div class="kpi-value" style="color: #3b82f6;">{dados['andamento']}</div>
+        <div class="kpi-desc">Equipamentos na oficina agora.</div>
+    </div>""", unsafe_allow_html=True)
 
-# --- 5. DASHBOARD CARDS (CONTAINERS) ---
-c1, c2, c3 = st.columns(3)
+with k2:
+    st.markdown(f"""<div class="kpi-card">
+        <div class="kpi-title">⏳ Fila de OS</div>
+        <div class="kpi-value" style="color: #f59e0b;">{dados['abertas']}</div>
+        <div class="kpi-desc">Serviços aguardando técnico.</div>
+    </div>""", unsafe_allow_html=True)
 
-# --- CARD 1: PARADAS (CRÍTICO) ---
-with c1:
-    with st.container(border=True):
-        # Ícone e Título
-        svg_stop = get_icon("stop", "#EF4444", "20").replace('\n', '')
-        st.markdown(f'<div class="kpi-title">{svg_stop} Máquinas Paradas</div>', unsafe_allow_html=True)
+with k3:
+    st.markdown(f"""<div class="kpi-card">
+        <div class="kpi-title">📦 Pendência Peças</div>
+        <div class="kpi-value" style="color: #ef4444;">{dados['aguardando']}</div>
+        <div class="kpi-desc">Aguardando suprimentos.</div>
+    </div>""", unsafe_allow_html=True)
 
-        # Valor com cor condicional
-        cor_val = "text-red" if q_parada > 0 else "text-secondary"
-        st.markdown(f'<div class="kpi-value {cor_val}">{q_parada}</div>', unsafe_allow_html=True)
+with k4:
+    cor_txt = "#ef4444" if dados['pneus_ausente'] > 0 else "#10b981"
+    st.markdown(f"""<div class="kpi-card">
+        <div class="kpi-title">🛞 Status Pneus</div>
+        <div class="kpi-value" style="color: {cor_txt};">{dados['pneus_ausente']}</div>
+        <div class="kpi-desc">Alertas de frotas descalçadas.</div>
+    </div>""", unsafe_allow_html=True)
 
-        # Botão de Ação
-        label_btn = "Ver Detalhes" if q_parada > 0 else "Sem paradas"
-        tipo_btn = "primary" if q_parada > 0 else "secondary"
-        if st.button(label_btn, key="btn_parada", use_container_width=True, type=tipo_btn, disabled=(q_parada == 0)):
-            popup_paradas()
+# --- 5. OPERAÇÕES RÁPIDAS ---
+st.markdown('<div class="section-title">⚡ Operações de Campo</div>', unsafe_allow_html=True)
 
-# --- CARD 2: PENDÊNCIAS (INFO) ---
-with c2:
-    with st.container(border=True):
-        svg_list = get_icon("dashboard", "#3B82F6", "20").replace('\n', '')
-        st.markdown(f'<div class="kpi-title">{svg_list} Pendências Totais</div>', unsafe_allow_html=True)
+col_op1, col_op2, col_op3, col_op4 = st.columns(4)
 
-        st.markdown(f'<div class="kpi-value text-blue">{q_aberta}</div>', unsafe_allow_html=True)
+with col_op1:
+    if st.button("📝 Nova OS", use_container_width=True, type="primary"):
+        st.switch_page("pages/5_Nova_Ordem_Servico.py")
+with col_op2:
+    if st.button("🛞 Gestão Pneus", use_container_width=True):
+        st.switch_page("pages/18_Controle_Pneus.py")
+with col_op3:
+    if st.button("⛽ Comboio", use_container_width=True):
+        st.switch_page("pages/19_Gestao_Comboio.py")
+with col_op4:
+    if st.button("🗺️ Mapa Frotas", use_container_width=True):
+        st.switch_page("pages/10_Mapa_Atendimentos.py")
 
-        if st.button("Listar Ordens", key="btn_pend", use_container_width=True):
-            popup_pendencias()
+# --- 6. RELATÓRIOS E INTELIGÊNCIA ---
+st.markdown('<div class="section-title">📊 Inteligência e Gestão</div>', unsafe_allow_html=True)
 
-# --- CARD 3: MURAL (AVISO) ---
-with c3:
-    with st.container(border=True):
-        svg_pin = get_icon("pin", "#F59E0B", "20").replace('\n', '')
-        st.markdown(f'<div class="kpi-title">{svg_pin} Mural de Avisos</div>', unsafe_allow_html=True)
+r1, r2, r3, r4 = st.columns(4)
 
-        st.markdown(f'<div class="kpi-value text-orange">{q_recados}</div>', unsafe_allow_html=True)
+with r1:
+    st.markdown('<div class="report-box">📈</div>', unsafe_allow_html=True)
+    if st.button("Indicadores KPI", use_container_width=True):
+        st.switch_page("pages/15_Indicadores_KPI.py")
 
-        if st.button("Ler Recados", key="btn_mural", use_container_width=True):
+with r2:
+    st.markdown('<div class="report-box">⏱️</div>', unsafe_allow_html=True)
+    if st.button("Eficiência RH", use_container_width=True):
+        st.switch_page("pages/17_Eficiencia_Apontamentos.py")
+
+with r3:
+    st.markdown('<div class="report-box">💰</div>', unsafe_allow_html=True)
+    if st.button("Custos Totais", use_container_width=True):
+        st.switch_page("pages/18_relatorio_gastos.py")
+
+with r4:
+    st.markdown('<div class="report-box">🧪</div>', unsafe_allow_html=True)
+    if st.button("Análise Óleo", use_container_width=True):
+        st.switch_page("pages/20_Analise_Preditiva_Oleo.py")
+
+# --- 7. MURAL DE AVISOS ---
+st.markdown('<div class="section-title">📢 Comunicação Interna</div>', unsafe_allow_html=True)
+
+with st.container(border=True):
+    col_icon, col_msg, col_btn = st.columns([0.4, 3, 1])
+    with col_icon:
+        st.markdown("<h1 style='text-align: center; margin: 0;'>📣</h1>", unsafe_allow_html=True)
+    with col_msg:
+        st.markdown(f"**Mural da Equipe**")
+        if dados['recados'] > 0:
+            st.markdown(
+                f"Atenção: Você tem <strong style='color:#f59e0b;'>{dados['recados']} novos avisos</strong> pendentes de leitura.",
+                unsafe_allow_html=True)
+        else:
+            st.markdown("Nenhum aviso novo no quadro de comunicações.")
+    with col_btn:
+        st.write("")
+        if st.button("Acessar Mural", use_container_width=True):
             st.switch_page("pages/11_Quadro_Avisos.py")
 
 st.markdown("<br><br>", unsafe_allow_html=True)
-
-# --- 6. ATALHOS DE AÇÃO (Secundários) ---
-st.markdown("##### ⚡ Ações Rápidas")
-bt1, bt2, bt3, bt4 = st.columns(4)
-
-with bt1:
-    with st.container(border=True):
-        if st.button("📝 Criar Ordem", use_container_width=True, type="primary"):
-            st.switch_page("pages/5_Nova_Ordem_Servico.py")
-        st.caption("Abrir chamado")
-
-with bt2:
-    with st.container(border=True):
-        if st.button("🔄 Gerenciar", use_container_width=True):
-            st.switch_page("pages/6_Gerenciar_Atendimento.py")
-        st.caption("Editar status")
-
-with bt3:
-    with st.container(border=True):
-        if st.button("🗺️ Mapa", use_container_width=True):
-            st.switch_page("pages/10_Mapa_Atendimentos.py")
-        st.caption("Ver frota")
-
-with bt4:
-    with st.container(border=True):
-        if st.button("📊 KPIs", use_container_width=True):
-            st.switch_page("pages/15_Indicadores_KPI.py")
-        st.caption("Relatórios")
