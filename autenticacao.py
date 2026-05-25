@@ -43,172 +43,253 @@ def garantir_tabela_usuarios():
 
 
 # --- Gerenciador de Cookies ---
-# Removido cache_resource para evitar TypeError, o componente gerencia seu estado
+@st.cache_resource
 def get_manager():
-    return stx.CookieManager(key="auth_cookie_manager")
+    return stx.CookieManager()
+
+
+cookie_manager = get_manager()
 
 
 def check_password():
-    """Retorna `True` se o usuário tiver uma senha correta / cookie válido."""
     garantir_tabela_usuarios()
-    cookie_manager = get_manager()
 
-    # 1. Verifica se já está logado na sessão atual (RAM)
+    # Se já logado na sessão RAM, retorna True direto
     if st.session_state.get("logged_in", False):
-        # Botão de Logout no Sidebar
-        with st.sidebar:
-            st.markdown("---")
-            if st.button("🚪 Sair do Sistema", use_container_width=True):
-                # Limpa o estado da sessão local
-                st.session_state["logged_in"] = False
-                if "username" in st.session_state: del st.session_state["username"]
-                if "user_nome" in st.session_state: del st.session_state["user_nome"]
-                if "force_change" in st.session_state: del st.session_state["force_change"]
-
-                # Tenta apagar o cookie com segurança (evita KeyError se já não existir)
-                try:
-                    cookie_manager.delete("manutencao_user")
-                except KeyError:
-                    pass  # Se o cookie já não estiver no dicionário, apenas ignora
-
-                st.rerun()
         return True
 
-    # 2. Verifica se tem Cookie válido salvo
-    token = cookie_manager.get("manutencao_user")
+    # Puxa o cookie "auth_token"
+    token = cookie_manager.get(cookie="auth_token")
+
     if token:
         try:
-            # O token salvo é o username direto
-            conn = sqlite3.connect("manutencao.db")
-            cursor = conn.cursor()
-            cursor.execute("SELECT nome, force_change_password FROM usuarios WHERE username = ?", (token,))
-            res = cursor.fetchone()
-            conn.close()
+            # O token salva: username|nome|timestamp_expiracao
+            parts = str(token).split("|")
+            if len(parts) == 3:
+                user_cookie = parts[0]
+                nome_cookie = parts[1]
+                exp_timestamp = float(parts[2])
 
-            if res:
-                st.session_state["logged_in"] = True
-                st.session_state["username"] = token
-                st.session_state["user_nome"] = res[0]
-                st.session_state["force_change"] = (res[1] == 1)
-                st.rerun()  # Recarrega a página para entrar
-        except Exception as e:
-            print(f"Erro ao ler cookie: {e}")
+                if datetime.now().timestamp() < exp_timestamp:
+                    st.session_state["logged_in"] = True
+                    st.session_state["username"] = user_cookie
+                    st.session_state["user_nome"] = nome_cookie
+                    st.rerun()
+        except:
+            pass
 
-    # 3. Se não está logado e não tem cookie válido, mostra tela de Login
+    # --- UI DA TELA DE LOGIN AVANÇADA ---
     st.markdown("""
-    <style>
-        .login-container {
-            max-width: 400px;
-            margin: 40px auto;
-            padding: 30px;
-            background-color: white;
-            border-radius: 12px;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-            border: 1px solid #E2E8F0;
-        }
-        .login-logo {
-            text-align: center;
-            margin-bottom: 20px;
-            font-size: 40px;
-        }
-        .login-title {
-            text-align: center;
-            color: #1E293B;
-            font-size: 24px;
-            font-weight: 700;
-            margin-bottom: 5px;
-        }
-        .login-subtitle {
-            text-align: center;
-            color: #64748B;
-            font-size: 14px;
-            margin-bottom: 30px;
-        }
-        /* Loading animation */
-        .loader-content {
-            text-align: center;
-            padding: 40px 20px;
-        }
-        .jumping-tractor {
-            font-size: 50px;
-            animation: jump 0.8s infinite alternate;
-            display: inline-block;
-            margin-bottom: 15px;
-        }
-        @keyframes jump {
-            0% { transform: translateY(0); }
-            100% { transform: translateY(-20px); }
-        }
-        .progress-container {
-            width: 100%;
-            background-color: #E2E8F0;
-            border-radius: 10px;
-            height: 8px;
-            margin-top: 20px;
-            overflow: hidden;
-        }
-        .progress-bar {
-            height: 100%;
-            background-color: #2E7D32;
-            width: 0%;
-            animation: progress 2.5s ease-in-out forwards;
-        }
-        @keyframes progress {
-            0% { width: 0%; }
-            100% { width: 100%; }
-        }
-    </style>
+        <style>
+            /* Resetando o fundo para preencher toda a tela */
+            .stApp {
+                background: linear-gradient(135deg, #1b5e20 0%, #4caf50 100%);
+            }
+
+            /* Escondendo cabeçalho e rodapé nativos do Streamlit */
+            header[data-testid="stHeader"] { visibility: hidden; }
+            footer { visibility: hidden; }
+
+            /* Centralização do conteúdo */
+            .block-container {
+                padding-top: 0rem !important;
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+                align-items: center;
+                min-height: 100vh;
+            }
+
+            /* Card de Login Flutuante */
+            .login-card {
+                background: rgba(255, 255, 255, 0.98);
+                padding: 40px;
+                border-radius: 24px;
+                box-shadow: 0 15px 35px rgba(0, 0, 0, 0.3);
+                text-align: center;
+                width: 100%;
+                max-width: 420px;
+                margin: auto;
+                animation: slideUp 0.8s cubic-bezier(0.25, 0.8, 0.25, 1);
+            }
+
+            /* Animação do Card */
+            @keyframes slideUp {
+                0% { opacity: 0; transform: translateY(50px); }
+                100% { opacity: 1; transform: translateY(0); }
+            }
+
+            /* Ícone de Trator no Logo pulsando levemente */
+            .logo-tractor {
+                font-size: 55px;
+                margin-bottom: 10px;
+                color: #2E7D32;
+                animation: pulse 2.5s infinite;
+            }
+            @keyframes pulse {
+                0% { transform: scale(1); }
+                50% { transform: scale(1.05); }
+                100% { transform: scale(1); }
+            }
+
+            /* Títulos */
+            .login-title {
+                color: #1b5e20;
+                font-size: 30px;
+                font-weight: 800;
+                margin-bottom: 5px;
+                letter-spacing: -0.5px;
+            }
+            .login-subtitle {
+                color: #666;
+                font-size: 15px;
+                margin-bottom: 30px;
+                font-weight: 500;
+            }
+
+            /* Ocultando os labels nativos do Streamlit */
+            div[data-testid="stTextInput"] label {
+                display: none;
+            }
+
+            /* Estilizando os inputs */
+            div[data-testid="stTextInput"] input {
+                border-radius: 12px !important;
+                border: 2px solid #e0e0e0 !important;
+                padding: 14px 18px !important;
+                font-size: 16px !important;
+                transition: all 0.3s;
+                background-color: #f9f9f9;
+            }
+            div[data-testid="stTextInput"] input:focus {
+                border-color: #4caf50 !important;
+                background-color: #ffffff;
+                box-shadow: 0 0 0 4px rgba(76, 175, 80, 0.1) !important;
+            }
+
+            /* Estilizando o Botão de Login */
+            div[data-testid="stButton"] button {
+                width: 100%;
+                background: linear-gradient(90deg, #1b5e20, #4caf50);
+                color: white;
+                font-weight: bold;
+                border: none;
+                padding: 12px 0;
+                border-radius: 12px;
+                font-size: 17px;
+                transition: all 0.3s ease;
+                margin-top: 15px;
+            }
+            div[data-testid="stButton"] button:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 8px 20px rgba(76, 175, 80, 0.4);
+                color: white;
+                border: none;
+            }
+
+            /* Cor do Checkbox */
+            div[data-testid="stCheckbox"] label span {
+                color: #555;
+                font-weight: 500;
+            }
+
+            /* --- TELA DE CARREGAMENTO (LOADING) --- */
+            @keyframes bounce {
+                0%, 100% { transform: translateY(0); }
+                50% { transform: translateY(-15px); }
+            }
+            .jumping-tractor {
+                font-size: 70px;
+                animation: bounce 1s infinite;
+            }
+            #loading-screen {
+                position: fixed;
+                top: 0; left: 0; width: 100vw; height: 100vh;
+                background: rgba(255, 255, 255, 0.98);
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+                align-items: center;
+                z-index: 99999;
+            }
+            .progress-container {
+                width: 250px;
+                height: 8px;
+                background-color: #e0e0e0;
+                border-radius: 10px;
+                margin-top: 20px;
+                overflow: hidden;
+            }
+            .progress-bar {
+                height: 100%;
+                background: linear-gradient(90deg, #1b5e20, #4caf50);
+                width: 0%;
+                animation: progress 2.5s ease-out forwards;
+            }
+            @keyframes progress {
+                0% { width: 0%; }
+                100% { width: 100%; }
+            }
+        </style>
     """, unsafe_allow_html=True)
 
     login_container = st.empty()
 
+    # Montando a estrutura visual com colunas vazias para "espremer" o card no centro
     with login_container.container():
-        st.markdown('<div class="login-container">', unsafe_allow_html=True)
-        st.markdown('<div class="login-logo">🚜</div>', unsafe_allow_html=True)
-        st.markdown('<div class="login-title">Acesso Restrito</div>', unsafe_allow_html=True)
-        st.markdown('<div class="login-subtitle">Sistema de Gestão de Frotas</div>', unsafe_allow_html=True)
+        st.markdown("""
+            <div class="login-card">
+                <div class="logo-tractor">🚜</div>
+                <div class="login-title">Sistema Cedro</div>
+                <div class="login-subtitle">Gestão de Frotas e Manutenção</div>
+            </div>
+        """, unsafe_allow_html=True)
 
-        with st.form("login_form"):
-            user = st.text_input("Usuário", placeholder="Digite seu usuário")
-            password = st.text_input("Senha", type="password", placeholder="Digite sua senha")
-            lembrar = st.checkbox("Lembrar meu acesso", value=True)
+        col1, col_center, col3 = st.columns([1, 2, 1])
+        with col_center:
+            # Inputs com ícones nos placeholders
+            user = st.text_input("Usuário", placeholder="👤 Nome de Utilizador")
+            pwd = st.text_input("Senha", type="password", placeholder="🔒 Palavra-passe")
+            manter_conectado = st.checkbox("Mantenha-me conectado")
 
-            submitted = st.form_submit_button("Entrar", type="primary", use_container_width=True)
+            if st.button("Entrar no Sistema"):
+                if not user or not pwd:
+                    st.error("Por favor, preencha o utilizador e a palavra-passe.")
+                    return False
 
-            if submitted:
                 conn = sqlite3.connect("manutencao.db")
                 cursor = conn.cursor()
-                cursor.execute("SELECT nome, password, force_change_password FROM usuarios WHERE username = ?", (user,))
+                cursor.execute("SELECT nome, password, force_change_password FROM usuarios WHERE username=?", (user,))
                 res = cursor.fetchone()
                 conn.close()
 
-                if res and verificar_senha(password, res[1]):
-                    # Salva Cookie se marcou 'lembrar'
-                    if lembrar:
-                        try:
-                            # Define expiração para 30 dias
-                            expire_date = datetime.now() + timedelta(days=30)
-                            cookie_manager.set("manutencao_user", user, expires_at=expire_date)
-                        except Exception as e:
-                            print(f"Erro ao gravar cookie: {e}")
+                if res and verificar_senha(pwd, res[1]):
+                    # Se "manter_conectado", salva o cookie para 7 dias, senão salva pra 1 hora
+                    dias = 7 if manter_conectado else (1 / 24)
+                    exp_date = datetime.now() + timedelta(days=dias)
+                    cookie_val = f"{user}|{res[0]}|{exp_date.timestamp()}"
+
+                    try:
+                        cookie_manager.set(cookie="auth_token", val=cookie_val, expires_at=exp_date)
+                    except Exception as e:
+                        print(f"Erro ao gravar cookie: {e}")
 
                     # --- ANIMAÇÃO DE LOADING ---
                     login_container.empty()
                     with login_container:
-                        st.markdown("<br><br>", unsafe_allow_html=True)
                         st.markdown("""
                         <div id="loading-screen">
-                            <div class="loader-content">
+                            <div class="loader-content" style="text-align: center;">
                                 <div class="jumping-tractor">🚜</div>
-                                <h2 style="color: #2E7D32; margin-bottom: 5px;">Iniciando Sistema...</h2>
-                                <p style="color: #888; font-size: 14px;">Carregando módulos e dados...</p>
+                                <h2 style="color: #2E7D32; margin-bottom: 5px; font-weight: 800;">Iniciando Sistema...</h2>
+                                <p style="color: #666; font-size: 15px;">A carregar módulos e painéis de controlo...</p>
                                 <div class="progress-container"><div class="progress-bar"></div></div>
                             </div>
                         </div>
                         """, unsafe_allow_html=True)
                         time.sleep(2.5)
 
-                        # Define Sessão RAM
+                    # Define Sessão RAM
                     st.session_state["logged_in"] = True
                     st.session_state["username"] = user
                     st.session_state["user_nome"] = res[0]
@@ -216,8 +297,6 @@ def check_password():
 
                     st.rerun()
                 else:
-                    st.error("Acesso Negado. Verifique seus dados.")
-
-        st.markdown('</div>', unsafe_allow_html=True)
+                    st.error("Acesso Negado. Verifique os seus dados e tente novamente.")
 
     return False
