@@ -12,3 +12,9 @@ fpdf
 matplotlib
 xlrd>=2.0.1
 pytz
+streamlit
+pandas
+xlsxwriter
+openpyxl
+fpdf
+extra-streamlit-components
