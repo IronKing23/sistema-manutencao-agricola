@@ -188,7 +188,7 @@ def criar_pagina(arquivo, titulo, icone, default=False):
 
 
 paginas_config = [
-    # Dashboards (AGORA COM 11 PÁGINAS)
+    # Dashboards (AGORA COM 12 PÁGINAS)
     ("pages/0_Inicio.py", "Início", "🏠", True),
     ("pages/1_Painel_Principal.py", "Visão Geral", "📊", False),
     ("pages/15_Indicadores_KPI.py", "Indicadores (MTBF)", "📈", False),
@@ -200,6 +200,7 @@ paginas_config = [
     ("pages/18_Controle_Pneus.py", "Controle de Pneus", "🛞", False),
     ("pages/20_Analise_Preditiva_Oleo.py", "Análise Óleo (Preditiva)", "🧪", False),
     ("pages/21_vistorias_terceiros.py", "Vistorias de Terceiros", "📋", False),
+    ("pages/22_Material_Rodante.py", "Material Rodante", "📋", False),
 
     # Operacional (4 PÁGINAS)
     ("pages/5_Nova_Ordem_Servico.py", "Nova O.S.", "📝", False),
