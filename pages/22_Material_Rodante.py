@@ -7,6 +7,7 @@ import sys
 import os
 import io
 import base64
+import time
 from fpdf import FPDF
 import tempfile
 
@@ -42,7 +43,8 @@ except ImportError:
         st.info(f"{icon} {msg}")
 
 load_custom_css()
-ui_header("Inspeção de Material Rodante", "Coleta de dados digitalizada, fotos e geração de relatórios PDF/Excel.", "🚜")
+ui_header("Inspeção de Material Rodante",
+          "Coleta de dados digitalizada, fotos, edição de histórico e relatórios PDF/Excel.", "🚜")
 
 
 # ==============================================================================
@@ -95,109 +97,296 @@ def buscar_inspecao_completa(id_inspecao):
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM inspecao_rodante WHERE id = ?", (id_inspecao,))
     row = cursor.fetchone()
-    columns = [col[0] for col in cursor.description]
+    columns = [col[0] for col in cursor.description] if cursor.description else []
     conn.close()
     return dict(zip(columns, row)) if row else None
 
 
-# ==============================================================================
-# COMPONENTES DO FORMULÁRIO (REUTILIZÁVEL LE / LD)
-# ==============================================================================
-def renderizar_lado_rodante(prefixo):
-    """
-    Gera o formulário para um lado específico (Lado Esquerdo ou Lado Direito)
-    e retorna um dicionário com os dados coletados.
-    """
-    dados = {}
+def deletar_inspecao(id_inspecao):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM inspecao_rodante WHERE id = ?", (id_inspecao,))
+    conn.commit()
+    conn.close()
 
+
+# ==============================================================================
+# HELPERS DE FORMULÁRIO
+# ==============================================================================
+def get_index(opcoes, valor):
+    """Helper para encontrar o índice seguro de um selectbox baseado em valor anterior"""
+    if not opcoes or valor not in opcoes:
+        return 0
+    return opcoes.index(valor)
+
+
+def render_linha_medida(nome_item, id_item, prefixo, opcoes_marca, opcoes_medida, opcoes_condicao, defaults, id_form):
+    # Tratamento de retrocompatibilidade para vistorias antigas
+    if isinstance(defaults, list):
+        defaults = {'condicao': defaults}
+    elif not isinstance(defaults, dict):
+        defaults = {}
+
+    st.markdown(f"**{nome_item}**")
+    row_data = {}
+    c_marca, c_cond, c_medidas = st.columns([1.5, 2, 2])
+
+    with c_marca:
+        if opcoes_marca:
+            idx = get_index(opcoes_marca, defaults.get('marca'))
+            row_data['marca'] = st.selectbox("Marca/Tipo", opcoes_marca, index=idx,
+                                             key=f"{prefixo}{id_item}_{id_form}_marca")
+        if opcoes_medida:
+            idx = get_index(opcoes_medida, defaults.get('medida_padrao'))
+            row_data['medida_padrao'] = st.selectbox("Padrão", opcoes_medida, index=idx,
+                                                     key=f"{prefixo}{id_item}_{id_form}_medida")
+
+    with c_cond:
+        if opcoes_condicao:
+            def_cond = defaults.get('condicao', [])
+            def_cond = [c for c in def_cond if c in opcoes_condicao]  # Segurança
+            row_data['condicao'] = st.multiselect("Anomalias/Condição", opcoes_condicao, default=def_cond,
+                                                  key=f"{prefixo}{id_item}_{id_form}_cond")
+
+    with c_medidas:
+        mc1, mc2, mc3 = st.columns(3)
+        row_data['std'] = mc1.number_input("STD", min_value=0.0, step=0.1, value=float(defaults.get('std', 0.0)),
+                                           key=f"{prefixo}{id_item}_{id_form}_std")
+        row_data['atual'] = mc2.number_input("Atual", min_value=0.0, step=0.1, value=float(defaults.get('atual', 0.0)),
+                                             key=f"{prefixo}{id_item}_{id_form}_atual")
+        row_data['restante'] = mc3.number_input("% Rest.", min_value=0.0, max_value=100.0, step=1.0,
+                                                value=float(defaults.get('restante', 0.0)),
+                                                key=f"{prefixo}{id_item}_{id_form}_rest")
+
+    return row_data
+
+
+def renderizar_lado_rodante(prefixo, defaults, id_form):
+    dados = {}
     st.markdown(f"#### ⚙️ Avaliação Geral - {prefixo.replace('_', '')}")
     col1, col2 = st.columns(2)
 
     with col1:
-        dados['truck_status'] = st.selectbox("Status do Truck",
-                                             ["OK", "Alinhado", "Empenado", "Trincado", "Desalinhado"],
-                                             key=f"{prefixo}truck_st")
-        dados['truck_comp'] = st.multiselect("Componentes do Truck", ["Bola", "Eixo", "Rótula"],
-                                             key=f"{prefixo}truck_cp")
-        dados['protecao_rolete'] = st.selectbox("Proteção do Rolete", ["OK", "Não Possui", "Desgastada"],
-                                                key=f"{prefixo}prot_rol")
+        opts_truck = ["OK", "Alinhado", "Empenado", "Trincado", "Desalinhado"]
+        dados['truck_status'] = st.selectbox("Status do Truck", opts_truck,
+                                             index=get_index(opts_truck, defaults.get('truck_status')),
+                                             key=f"{prefixo}{id_form}_truck_st")
+
+        opts_comp = ["Bola", "Eixo", "Rótula"]
+        dados['truck_comp'] = st.multiselect("Componentes do Truck", opts_comp,
+                                             default=[c for c in defaults.get('truck_comp', []) if c in opts_comp],
+                                             key=f"{prefixo}{id_form}_truck_cp")
+
+        opts_prot = ["OK", "Não Possui", "Desgastada"]
+        dados['protecao_rolete'] = st.selectbox("Proteção do Rolete", opts_prot,
+                                                index=get_index(opts_prot, defaults.get('protecao_rolete')),
+                                                key=f"{prefixo}{id_form}_prot_rol")
 
     with col2:
-        dados['guia_esteira_status'] = st.selectbox("Guia da Esteira", ["OK", "Faltando", "Suporte Danificado"],
-                                                    key=f"{prefixo}guia_st")
+        opts_guia = ["OK", "Faltando", "Suporte Danificado"]
+        dados['guia_esteira_status'] = st.selectbox("Guia da Esteira", opts_guia,
+                                                    index=get_index(opts_guia, defaults.get('guia_esteira_status')),
+                                                    key=f"{prefixo}{id_form}_guia_st")
         dados['guia_esteira_qtd'] = st.number_input("Quant. Guias Danificadas", min_value=0, step=1,
-                                                    key=f"{prefixo}guia_qtd")
-        dados['mao_amigo'] = st.multiselect("Mão de Amigo", ["OK", "Soldada", "Sem Aperto", "Paraf. Quebrado"],
-                                            key=f"{prefixo}mao_amg")
+                                                    value=int(defaults.get('guia_esteira_qtd', 0)),
+                                                    key=f"{prefixo}{id_form}_guia_qtd")
+
+        opts_mao = ["OK", "Soldada", "Sem Aperto", "Paraf. Quebrado"]
+        dados['mao_amigo'] = st.multiselect("Mão de Amigo", opts_mao,
+                                            default=[c for c in defaults.get('mao_amigo', []) if c in opts_mao],
+                                            key=f"{prefixo}{id_form}_mao_amg")
 
     st.markdown("---")
     st.markdown(f"#### 📏 Medições e Desgastes - {prefixo.replace('_', '')}")
 
-    def render_linha_medida(nome_item, id_item, opcoes_marca=None, opcoes_medida=None, opcoes_condicao=None):
-        st.markdown(f"**{nome_item}**")
-        row_data = {}
-        c_marca, c_cond, c_medidas = st.columns([1.5, 2, 2])
+    dados['elo'] = render_linha_medida("Elo", "elo", prefixo, ["ITM", "BRC", "VTK", "ITR"], ["96", "98", "106"],
+                                       ["Trincado", "Lascado", "Desgaste Lat."], defaults.get('elo', {}), id_form)
+    dados['bucha'] = render_linha_medida("Bucha", "bucha", prefixo, ["Seca", "Lubrificada", "Graxa"],
+                                         ["53.8", "57", "60"], ["Girada", "Novo", "Trincado/Furado"],
+                                         defaults.get('bucha', {}), id_form)
+    dados['passo'] = render_linha_medida("Passo", "passo", prefixo, None, None,
+                                         ["T. Correta", "T. Excessiva", "T. Frouxa"], defaults.get('passo', {}),
+                                         id_form)
+    dados['sapata'] = render_linha_medida("Sapata", "sapata", prefixo, ["Paralela", "Trapezoidal"], None,
+                                          ["Novo", "Recuperado", "Desgastado"], defaults.get('sapata', {}), id_form)
+    dados['roda_guia'] = render_linha_medida("Roda Guia", "roda_guia", prefixo, ["Novo", "Recondicionado"],
+                                             ["17", "21", "23"], ["Folga", "Desgaste Mancal"],
+                                             defaults.get('roda_guia', {}), id_form)
+    dados['roda_motriz'] = render_linha_medida("Roda Motriz", "roda_motriz", prefixo, ["ITM", "BRC", "VTK", "ITR"],
+                                               None,
+                                               ["Desg. Ponta", "Desg. Lateral", "Paraf. Quebrado", "Paraf. Faltando"],
+                                               defaults.get('roda_motriz', {}), id_form)
+    dados['rolete_sup'] = render_linha_medida("Rolete Superior", "rolete_sup", prefixo, None, None,
+                                              ["Novo", "Vazamento", "Travado", "Recond.", "Desborrachado"],
+                                              defaults.get('rolete_sup', {}), id_form)
 
-        with c_marca:
-            if opcoes_marca:
-                row_data['marca'] = st.selectbox("Marca/Tipo", opcoes_marca, key=f"{prefixo}{id_item}_marca")
-            if opcoes_medida:
-                row_data['medida_padrao'] = st.selectbox("Padrão", opcoes_medida, key=f"{prefixo}{id_item}_medida")
-
-        with c_cond:
-            if opcoes_condicao:
-                row_data['condicao'] = st.multiselect("Anomalias/Condição", opcoes_condicao,
-                                                      key=f"{prefixo}{id_item}_cond")
-
-        with c_medidas:
-            mc1, mc2, mc3 = st.columns(3)
-            row_data['std'] = mc1.number_input("STD", min_value=0.0, step=0.1, key=f"{prefixo}{id_item}_std")
-            row_data['atual'] = mc2.number_input("Atual", min_value=0.0, step=0.1, key=f"{prefixo}{id_item}_atual")
-            row_data['restante'] = mc3.number_input("% Rest.", min_value=0.0, max_value=100.0, step=1.0,
-                                                    key=f"{prefixo}{id_item}_rest")
-
-        return row_data
-
-    dados['elo'] = render_linha_medida("Elo", "elo", ["ITM", "BRC", "VTK", "ITR"], ["96", "98", "106"],
-                                       ["Trincado", "Lascado", "Desgaste Lat."])
-    dados['bucha'] = render_linha_medida("Bucha", "bucha", ["Seca", "Lubrificada", "Graxa"], ["53.8", "57", "60"],
-                                         ["Girada", "Novo", "Trincado/Furado"])
-    dados['passo'] = render_linha_medida("Passo", "passo", None, None, ["T. Correta", "T. Excessiva", "T. Frouxa"])
-    dados['sapata'] = render_linha_medida("Sapata", "sapata", ["Paralela", "Trapezoidal"], None,
-                                          ["Novo", "Recuperado", "Desgastado"])
-    dados['roda_guia'] = render_linha_medida("Roda Guia", "roda_guia", ["Novo", "Recondicionado"], ["17", "21", "23"],
-                                             ["Folga", "Desgaste Mancal"])
-    dados['roda_motriz'] = render_linha_medida("Roda Motriz", "roda_motriz", ["ITM", "BRC", "VTK", "ITR"], None,
-                                               ["Desg. Ponta", "Desg. Lateral", "Paraf. Quebrado", "Paraf. Faltando"])
-    dados['rolete_sup'] = render_linha_medida("Rolete Superior", "rolete_sup", None, None,
-                                              ["Novo", "Vazamento", "Travado", "Recond.", "Desborrachado"])
-
-    st.markdown("**Roletes Inferiores**")
+    st.markdown("---")
+    st.markdown("#### 🛞 Roletes Inferiores")
     for i in range(1, 9):
-        c_num, c_cond = st.columns([1, 4])
-        c_num.markdown(f"Nº {i}")
-        dados[f'rolete_inf_{i}'] = c_cond.multiselect(
-            "Situação",
-            ["Normal", "Desabou", "Vazamento"],
-            key=f"{prefixo}rol_inf_{i}",
-            label_visibility="collapsed"
+        dados[f'rolete_inf_{i}'] = render_linha_medida(
+            f"Nº {i}", f"rolete_inf_{i}", prefixo,
+            None, None, ["Normal", "Desabou", "Vazamento"],
+            defaults.get(f'rolete_inf_{i}', {}), id_form
         )
 
     return dados
 
 
 # ==============================================================================
+# MOTOR DO FORMULÁRIO (USADO PARA NOVO E EDITAR)
+# ==============================================================================
+def render_form_vistoria(registro_bd=None):
+    modo_edicao = registro_bd is not None
+    id_form = registro_bd['id'] if modo_edicao else "novo"
+
+    # Extrai JSON
+    json_data = {}
+    if modo_edicao and registro_bd.get('dados_json'):
+        json_data = json.loads(registro_bd['dados_json'])
+
+    def_le = json_data.get('LE', {})
+    def_ld = json_data.get('LD', {})
+    def_obs = json_data.get('observacoes', '')
+    def_fotos_antigas = json_data.get('fotos', [])
+
+    with st.form(f"form_rodante_{id_form}"):
+        st.subheader("1. Identificação do Equipamento")
+        c1, c2, c3 = st.columns(3)
+
+        with c1:
+            nome_tecnico = st.text_input("Técnico Responsável*", value=registro_bd['tecnico'] if modo_edicao else "",
+                                         placeholder="Seu nome", key=f"tec_{id_form}")
+
+            dt_val = datetime.today()
+            if modo_edicao and registro_bd['data_inspecao']:
+                dt_val = datetime.strptime(registro_bd['data_inspecao'], '%Y-%m-%d').date()
+            data_coleta = st.date_input("Data da Avaliação*", value=dt_val, key=f"dt_{id_form}")
+
+            local = st.text_input("Local / Usina*", value=registro_bd['local'] if modo_edicao else "Usina Cedro",
+                                  key=f"loc_{id_form}")
+
+        with c2:
+            df_frotas = carregar_frotas()
+            frotas_lista = df_frotas['frota'].tolist() if not df_frotas.empty else []
+
+            idx_frota = None
+            if modo_edicao and registro_bd['frota'] in frotas_lista:
+                idx_frota = frotas_lista.index(registro_bd['frota'])
+
+            frota_selecionada = st.selectbox("Frota*", options=frotas_lista, index=idx_frota,
+                                             placeholder="Selecione a Frota", key=f"frota_{id_form}")
+
+            modelo_maquina = registro_bd['modelo'] if modo_edicao else ""
+            if frota_selecionada and not df_frotas.empty and not modo_edicao:
+                modelo_maquina = df_frotas[df_frotas['frota'] == frota_selecionada]['modelo'].values[0]
+
+            modelo = st.text_input("Modelo", value=modelo_maquina, key=f"mod_{id_form}")
+            horimetro = st.number_input("Horímetro", min_value=0.0, step=1.0,
+                                        value=float(registro_bd['horimetro']) if modo_edicao else 0.0,
+                                        key=f"hor_{id_form}")
+
+        with c3:
+            agreg_le = st.text_input("Nº Agregado L.E.", value=registro_bd['agreg_le'] if modo_edicao else "",
+                                     key=f"agle_{id_form}")
+            agreg_ld = st.text_input("Nº Agregado L.D.", value=registro_bd['agreg_ld'] if modo_edicao else "",
+                                     key=f"agld_{id_form}")
+
+        st.markdown("---")
+        st.subheader("2. Avaliação de Lados")
+
+        t_le, t_ld = st.tabs(["⬅️ Lado Esquerdo (L.E.)", "➡️ Lado Direito (L.D.)"])
+        with t_le:
+            dados_le = renderizar_lado_rodante("LE_", def_le, id_form)
+        with t_ld:
+            dados_ld = renderizar_lado_rodante("LD_", def_ld, id_form)
+
+        st.markdown("---")
+        st.subheader("3. Observações e Evidências Fotográficas")
+
+        observacoes_vistoria = st.text_area("Observações Gerais sobre a Vistoria", value=def_obs,
+                                            placeholder="Anote aqui qualquer detalhe...", key=f"obs_{id_form}")
+
+        if modo_edicao and def_fotos_antigas:
+            st.info(
+                f"📸 Esta inspeção já possui {len(def_fotos_antigas)} foto(s) anexada(s). Novas fotos serão adicionadas a elas.")
+            limpar_fotos = st.checkbox("🗑️ Apagar fotos antigas do banco de dados ao salvar", value=False,
+                                       key=f"limpar_{id_form}")
+        else:
+            limpar_fotos = False
+
+        st.info("💡 **Dica de Câmera:** Se estiver no telemóvel, clicar em 'Browse files' permitirá usar a câmera.")
+        fotos_upload = st.file_uploader("📷 Anexar Novas Fotos", accept_multiple_files=True, type=['png', 'jpg', 'jpeg'],
+                                        key=f"up_fotos_{id_form}")
+
+        st.markdown("---")
+        texto_botao = "💾 Atualizar Inspeção Existente" if modo_edicao else "💾 Salvar Nova Inspeção"
+        btn_salvar = st.form_submit_button(texto_botao, type="primary", use_container_width=True)
+
+        if btn_salvar:
+            if not nome_tecnico or not frota_selecionada:
+                st.error("Preencha o Nome do Técnico e a Frota!")
+            else:
+                fotos_finais = [] if limpar_fotos else def_fotos_antigas.copy()
+                if fotos_upload:
+                    for foto in fotos_upload:
+                        b64 = base64.b64encode(foto.read()).decode('utf-8')
+                        fotos_finais.append(b64)
+
+                payload_json = {
+                    "LE": dados_le,
+                    "LD": dados_ld,
+                    "observacoes": observacoes_vistoria,
+                    "fotos": fotos_finais
+                }
+
+                try:
+                    conn = get_db_connection()
+                    cursor = conn.cursor()
+
+                    if modo_edicao:
+                        cursor.execute("""
+                            UPDATE inspecao_rodante SET 
+                                data_inspecao=?, tecnico=?, local=?, frota=?, modelo=?, 
+                                horimetro=?, agreg_le=?, agreg_ld=?, dados_json=?
+                            WHERE id=?
+                        """, (
+                            data_coleta.strftime('%Y-%m-%d'), nome_tecnico, local,
+                            frota_selecionada, modelo, horimetro, agreg_le, agreg_ld,
+                            json.dumps(payload_json), id_form
+                        ))
+                        msg = "✅ Atualização guardada com sucesso!"
+                    else:
+                        cursor.execute("""
+                            INSERT INTO inspecao_rodante 
+                            (data_inspecao, tecnico, local, frota, modelo, horimetro, agreg_le, agreg_ld, dados_json)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (
+                            data_coleta.strftime('%Y-%m-%d'), nome_tecnico, local,
+                            frota_selecionada, modelo, horimetro, agreg_le, agreg_ld,
+                            json.dumps(payload_json)
+                        ))
+                        msg = "✅ Nova inspeção criada com sucesso!"
+
+                    conn.commit()
+                    conn.close()
+                    st.success(msg)
+                    st.balloons()
+                    time.sleep(1.5)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Erro ao salvar na base de dados: {e}")
+
+
+# ==============================================================================
 # GERAÇÃO DE EXCEL (ESPELHO)
 # ==============================================================================
 def gerar_excel_rodante(registro):
-    if not OPENPYXL_AVAILABLE:
-        return None
+    if not OPENPYXL_AVAILABLE: return None
 
     wb = Workbook()
     ws = wb.active
     ws.title = "Avaliação Material Rodante"
 
-    # Estilos
     header_font = Font(bold=True, color="FFFFFF")
     header_fill = PatternFill(start_color="1E293B", end_color="1E293B", fill_type="solid")
     sub_fill = PatternFill(start_color="E2E8F0", end_color="E2E8F0", fill_type="solid")
@@ -207,7 +396,6 @@ def gerar_excel_rodante(registro):
     align_c = Alignment(horizontal="center", vertical="center")
     align_l = Alignment(horizontal="left", vertical="center", wrap_text=True)
 
-    # Cabeçalho Geral
     ws.merge_cells('A1:F1')
     ws['A1'] = "AVALIAÇÃO DE MATERIAL RODANTE - USINA CEDRO"
     ws['A1'].font = Font(bold=True, size=14)
@@ -234,7 +422,6 @@ def gerar_excel_rodante(registro):
         tit_cell.fill = sub_fill
         ws.merge_cells(start_row=ws.max_row, start_column=1, end_row=ws.max_row, end_column=6)
 
-        # Avaliação Geral
         ws.append(["TRUCK", "GUIA ESTEIRA", "PROT. ROLETE", "MÃO DE AMIGO", "", ""])
         for i in range(1, 5):
             c = ws.cell(row=ws.max_row, column=i)
@@ -252,7 +439,6 @@ def gerar_excel_rodante(registro):
         for i in range(1, 5): ws.cell(row=ws.max_row, column=i).alignment = align_c
         ws.append([])
 
-        # Tabela de medidas
         head_row = ["COMPONENTE", "ESPECIFICAÇÕES", "ANOMALIAS / CONDIÇÕES", "STD", "ATUAL", "% REST."]
         ws.append(head_row)
         for i in range(1, 7):
@@ -267,9 +453,18 @@ def gerar_excel_rodante(registro):
             ('SAPATA', 'sapata'), ('RODA GUIA', 'roda_guia'),
             ('RODA MOTRIZ', 'roda_motriz'), ('ROLETE SUP.', 'rolete_sup')
         ]
+        # Inserir os roletes inferiores no fluxo principal
+        for i in range(1, 9):
+            itens.append((f'ROLETE INF. {i}', f'rolete_inf_{i}'))
 
         for nome, chave in itens:
             item_data = lado_data.get(chave, {})
+            # Tratamento de retrocompatibilidade para vistorias antigas
+            if isinstance(item_data, list):
+                item_data = {'condicao': item_data}
+            elif not isinstance(item_data, dict):
+                item_data = {}
+
             esp = []
             if item_data.get('marca'): esp.append(item_data['marca'])
             if item_data.get('medida_padrao'): esp.append(item_data['medida_padrao'])
@@ -284,16 +479,6 @@ def gerar_excel_rodante(registro):
                 c = ws.cell(row=ws.max_row, column=i)
                 c.border = border
                 if i > 3: c.alignment = align_c
-
-        ws.append([])
-        ws.append(["ROLETES INFERIORES"])
-        ws.cell(row=ws.max_row, column=1).font = bold
-        linha1 = "  |  ".join([f"N{i}: {','.join(lado_data.get(f'rolete_inf_{i}', [])) or 'OK'}" for i in range(1, 5)])
-        linha2 = "  |  ".join([f"N{i}: {','.join(lado_data.get(f'rolete_inf_{i}', [])) or 'OK'}" for i in range(5, 9)])
-        ws.append([linha1]);
-        ws.merge_cells(start_row=ws.max_row, start_column=1, end_row=ws.max_row, end_column=6)
-        ws.append([linha2]);
-        ws.merge_cells(start_row=ws.max_row, start_column=1, end_row=ws.max_row, end_column=6)
         ws.append([])
 
     preencher_lado("LADO ESQUERDO (L.E.)", dados.get('LE', {}))
@@ -305,7 +490,6 @@ def gerar_excel_rodante(registro):
     ws.merge_cells(start_row=ws.max_row, start_column=1, end_row=ws.max_row, end_column=6)
     ws.cell(row=ws.max_row, column=1).alignment = align_l
 
-    # Ajuste de larguras
     ws.column_dimensions['A'].width = 18
     ws.column_dimensions['B'].width = 30
     ws.column_dimensions['C'].width = 35
@@ -324,28 +508,22 @@ def gerar_excel_rodante(registro):
 # ==============================================================================
 class PDFMaterialRodante(FPDF):
     def _sanitize(self, text):
-        """Escudo anti-erros: Remove qualquer caractere que a fonte do PDF não suporte"""
         if text is None: return ""
         return str(text).encode('latin-1', 'ignore').decode('latin-1')
 
     def cell(self, *args, **kwargs):
         new_args = list(args)
-        if len(new_args) >= 3:
-            new_args[2] = self._sanitize(new_args[2])
-        if 'txt' in kwargs:
-            kwargs['txt'] = self._sanitize(kwargs['txt'])
+        if len(new_args) >= 3: new_args[2] = self._sanitize(new_args[2])
+        if 'txt' in kwargs: kwargs['txt'] = self._sanitize(kwargs['txt'])
         super().cell(*new_args, **kwargs)
 
     def multi_cell(self, *args, **kwargs):
         new_args = list(args)
-        if len(new_args) >= 3:
-            new_args[2] = self._sanitize(new_args[2])
-        if 'txt' in kwargs:
-            kwargs['txt'] = self._sanitize(kwargs['txt'])
+        if len(new_args) >= 3: new_args[2] = self._sanitize(new_args[2])
+        if 'txt' in kwargs: kwargs['txt'] = self._sanitize(kwargs['txt'])
         super().multi_cell(*new_args, **kwargs)
 
     def header(self):
-        # Inserção do Logotipo Padrão Cedro
         caminho_logo = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logo_cedro.png")
         if os.path.exists(caminho_logo):
             self.image(caminho_logo, 10, 8, 15)
@@ -361,7 +539,6 @@ def gerar_pdf_rodante(registro):
     pdf = PDFMaterialRodante()
     pdf.add_page()
 
-    # --- CABEÇALHO DO RELATÓRIO ---
     pdf.set_font('Arial', 'B', 9)
     pdf.set_fill_color(240, 240, 240)
 
@@ -399,7 +576,6 @@ def gerar_pdf_rodante(registro):
 
     dados = json.loads(registro.get('dados_json', '{}'))
 
-    # --- FUNÇÃO PARA IMPRIMIR UM LADO ---
     def imprimir_lado(titulo, lado_data):
         pdf.set_font('Arial', 'B', 11)
         pdf.set_fill_color(200, 200, 200)
@@ -426,7 +602,6 @@ def gerar_pdf_rodante(registro):
 
         pdf.ln(2)
 
-        # Tabela de Medidas
         pdf.set_font('Arial', 'B', 8)
         pdf.set_fill_color(230, 230, 230)
         pdf.cell(30, 5, 'COMPONENTE', 1, 0, 'C', fill=True)
@@ -442,9 +617,17 @@ def gerar_pdf_rodante(registro):
             ('SAPATA', 'sapata'), ('RODA GUIA', 'roda_guia'),
             ('RODA MOTRIZ', 'roda_motriz'), ('ROLETE SUP.', 'rolete_sup')
         ]
+        # Adiciona roletes inferiores no PDF
+        for i in range(1, 9):
+            itens.append((f'ROLETE INF. {i}', f'rolete_inf_{i}'))
 
         for nome_display, chave in itens:
             item_data = lado_data.get(chave, {})
+            # Tratamento de retrocompatibilidade para vistorias antigas
+            if isinstance(item_data, list):
+                item_data = {'condicao': item_data}
+            elif not isinstance(item_data, dict):
+                item_data = {}
 
             esp = []
             if item_data.get('marca'): esp.append(item_data['marca'])
@@ -460,32 +643,11 @@ def gerar_pdf_rodante(registro):
             pdf.cell(13, 5, str(item_data.get('atual', 0)), 1, 0, 'C')
             pdf.cell(14, 5, str(item_data.get('restante', 0)) + "%", 1, 1, 'C')
 
-        # Roletes Inferiores
-        pdf.set_font('Arial', 'B', 8)
-        pdf.cell(0, 5, 'ROLETES INFERIORES', 1, 1, 'C', fill=True)
-        pdf.set_font('Arial', '', 7)
-
-        linha1 = ""
-        linha2 = ""
-        for i in range(1, 5):
-            conds = ", ".join(lado_data.get(f'rolete_inf_{i}', []))
-            if not conds: conds = "OK"
-            linha1 += f"N{i}: {conds}   |   "
-
-        for i in range(5, 9):
-            conds = ", ".join(lado_data.get(f'rolete_inf_{i}', []))
-            if not conds: conds = "OK"
-            linha2 += f"N{i}: {conds}   |   "
-
-        pdf.cell(0, 5, linha1, 1, 1, 'L')
-        pdf.cell(0, 5, linha2, 1, 1, 'L')
         pdf.ln(5)
 
-    # Imprime os dois lados
     imprimir_lado("LADO ESQUERDO (L.E.)", dados.get('LE', {}))
     imprimir_lado("LADO DIREITO (L.D.)", dados.get('LD', {}))
 
-    # --- OBSERVAÇÕES ---
     obs = dados.get('observacoes', '')
     if obs:
         pdf.ln(2)
@@ -495,7 +657,6 @@ def gerar_pdf_rodante(registro):
         pdf.set_font('Arial', '', 8)
         pdf.multi_cell(0, 5, obs, 1, 'L')
 
-    # --- ANEXO FOTOGRÁFICO ---
     fotos = dados.get('fotos', [])
     if fotos:
         pdf.add_page()
@@ -504,44 +665,35 @@ def gerar_pdf_rodante(registro):
         pdf.cell(0, 10, 'ANEXO FOTOGRAFICO', 1, 1, 'C', fill=True)
         pdf.ln(5)
 
-        # Grid para 2 fotos por linha
         x_positions = [10, 105]
         col_idx = 0
         y_curr = pdf.get_y()
-        img_height = 70  # Altura padrão
+        img_height = 70
 
         for b64_str in fotos:
-            # Converte de volta de base64 para binário
             foto_bytes = base64.b64decode(b64_str)
-
-            # Cria ficheiro temporário para o FPDF conseguir ler
             with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp_foto:
                 tmp_foto.write(foto_bytes)
                 tmp_path = tmp_foto.name
 
-            # Controlo de Quebra de Página
             if col_idx == 2:
                 col_idx = 0
                 y_curr += img_height + 5
                 if y_curr + img_height > 280:
                     pdf.add_page()
                     y_curr = pdf.get_y()
-
-            # Insere Imagem
             try:
-                # w=90mm mantem a proporção correta dentro das margens
                 pdf.image(tmp_path, x=x_positions[col_idx], y=y_curr, w=90)
             except Exception as e:
-                pass  # Ignora se a imagem for corrompida
+                pass
             finally:
                 os.remove(tmp_path)
 
             col_idx += 1
 
-    # Salva no buffer (Com a correção de lock no Windows)
     tmp_pdf = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
     pdf_path = tmp_pdf.name
-    tmp_pdf.close()  # Liberta o ficheiro para o Windows não bloquear
+    tmp_pdf.close()
 
     pdf.output(pdf_path)
 
@@ -549,138 +701,62 @@ def gerar_pdf_rodante(registro):
         bytes_pdf = f.read()
 
     os.remove(pdf_path)
-
     return bytes_pdf
 
 
 # ==============================================================================
 # INTERFACE PRINCIPAL - TABS
 # ==============================================================================
-tab_nova, tab_historico = st.tabs(["📝 Nova Inspeção", "📋 Histórico de Inspeções"])
+tab_nova, tab_historico = st.tabs(["📝 Nova Inspeção", "📋 Histórico / Consultar / Editar"])
 
 with tab_nova:
-    with st.form("form_rodante"):
-        st.subheader("1. Identificação do Equipamento")
-        c1, c2, c3 = st.columns(3)
-
-        with c1:
-            nome_tecnico = st.text_input("Técnico Responsável*", placeholder="Seu nome")
-            data_coleta = st.date_input("Data da Avaliação*")
-            local = st.text_input("Local / Usina*", value="Usina Cedro")
-
-        with c2:
-            df_frotas = carregar_frotas()
-            frotas_lista = df_frotas['frota'].tolist() if not df_frotas.empty else []
-            frota_selecionada = st.selectbox("Frota*", options=frotas_lista, index=None,
-                                             placeholder="Selecione a Frota")
-
-            modelo_maquina = ""
-            if frota_selecionada and not df_frotas.empty:
-                modelo_maquina = df_frotas[df_frotas['frota'] == frota_selecionada]['modelo'].values[0]
-
-            modelo = st.text_input("Modelo", value=modelo_maquina)
-            horimetro = st.number_input("Horímetro", min_value=0.0, step=1.0)
-
-        with c3:
-            agreg_le = st.text_input("Nº Agregado L.E.")
-            agreg_ld = st.text_input("Nº Agregado L.D.")
-
-        st.markdown("---")
-        st.subheader("2. Avaliação de Lados")
-
-        # Abas internas para não deixar a tela gigante
-        t_le, t_ld = st.tabs(["⬅️ Lado Esquerdo (L.E.)", "➡️ Lado Direito (L.D.)"])
-
-        with t_le:
-            dados_le = renderizar_lado_rodante("LE_")
-
-        with t_ld:
-            dados_ld = renderizar_lado_rodante("LD_")
-
-        st.markdown("---")
-        st.subheader("3. Observações e Evidências Fotográficas")
-
-        observacoes_vistoria = st.text_area("Observações Gerais sobre a Vistoria",
-                                            placeholder="Anote aqui qualquer detalhe adicional ou recomendações...")
-
-        st.info(
-            "💡 **Dica de Câmera:** Se estiver no telemóvel/tablet, clicar em 'Browse files' permitirá tirar fotos direto da câmara do seu dispositivo.")
-        fotos_upload = st.file_uploader("📷 Anexar Fotos da Vistoria", accept_multiple_files=True,
-                                        type=['png', 'jpg', 'jpeg'])
-
-        st.markdown("---")
-        btn_salvar = st.form_submit_button("💾 Salvar Inspeção no Banco de Dados", type="primary",
-                                           use_container_width=True)
-
-        if btn_salvar:
-            if not nome_tecnico or not frota_selecionada:
-                st.error("Preencha o Nome do Técnico e a Frota!")
-            else:
-                # Processa imagens para guardar em Base64
-                fotos_b64 = []
-                if fotos_upload:
-                    for foto in fotos_upload:
-                        b64 = base64.b64encode(foto.read()).decode('utf-8')
-                        fotos_b64.append(b64)
-
-                payload_json = {
-                    "LE": dados_le,
-                    "LD": dados_ld,
-                    "observacoes": observacoes_vistoria,
-                    "fotos": fotos_b64
-                }
-
-                try:
-                    conn = get_db_connection()
-                    cursor = conn.cursor()
-                    cursor.execute("""
-                        INSERT INTO inspecao_rodante 
-                        (data_inspecao, tecnico, local, frota, modelo, horimetro, agreg_le, agreg_ld, dados_json)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (
-                        data_coleta.strftime('%Y-%m-%d'), nome_tecnico, local,
-                        frota_selecionada, modelo, horimetro, agreg_le, agreg_ld,
-                        json.dumps(payload_json)
-                    ))
-                    conn.commit()
-                    conn.close()
-
-                    st.success("✅ Avaliação de Material Rodante salva com sucesso!")
-                    st.balloons()
-                except Exception as e:
-                    st.error(f"Erro ao salvar na base de dados: {e}")
+    st.info("Preencha os campos abaixo para registrar uma nova inspeção.")
+    render_form_vistoria()  # Chama o motor sem registro (modo NOVO)
 
 with tab_historico:
-    st.subheader("Histórico de Avaliações")
-    st.caption("Consulte inspeções antigas e reconstrua o relatório em PDF ou Excel.")
+    st.subheader("Consultar, Editar e Exportar")
+    st.caption("Filtre as inspeções, carregue os dados para alterá-los ou gere o PDF/Excel.")
 
     df_hist = carregar_historico()
 
     if df_hist.empty:
         ui_empty_state("Nenhuma inspeção de material rodante registrada ainda.", "📄")
     else:
-        # Formata para visualização
-        df_hist['display'] = "ID " + df_hist['id'].astype(str) + " - " + df_hist['frota'] + " (" + df_hist[
-            'data_inspecao'] + ")"
+        # Filtros
+        c_f1, c_f2 = st.columns(2)
+        with c_f1:
+            frotas_cad = ["Todas as Frotas"] + sorted(df_hist['frota'].unique().tolist())
+            filtro_frota = st.selectbox("Filtrar por Frota", options=frotas_cad)
+        with c_f2:
+            filtro_data = st.date_input("Filtrar por Período", value=[])
 
-        inspecao_sel = st.selectbox("Selecione a Avaliação para visualizar/baixar:", df_hist['display'], index=None)
+        df_filtrado = df_hist.copy()
+        if filtro_frota != "Todas as Frotas":
+            df_filtrado = df_filtrado[df_filtrado['frota'] == filtro_frota]
+        if len(filtro_data) == 2:
+            dt_inicio = filtro_data[0].strftime('%Y-%m-%d')
+            dt_fim = filtro_data[1].strftime('%Y-%m-%d')
+            df_filtrado = df_filtrado[
+                (df_filtrado['data_inspecao'] >= dt_inicio) & (df_filtrado['data_inspecao'] <= dt_fim)]
+
+        df_filtrado['display'] = "ID " + df_filtrado['id'].astype(str) + " - " + df_filtrado['frota'] + " (" + \
+                                 df_filtrado['data_inspecao'] + ")"
+
+        st.markdown("---")
+        inspecao_sel = st.selectbox("Selecione a Avaliação para Consultar/Editar:", df_filtrado['display'], index=None)
 
         if inspecao_sel:
             id_banco = int(inspecao_sel.split(" - ")[0].replace("ID ", ""))
-
             registro_completo = buscar_inspecao_completa(id_banco)
 
             if registro_completo:
-                st.info(
-                    f"**Técnico:** {registro_completo['tecnico']} | **Horímetro:** {registro_completo['horimetro']}")
-
-                # Botões de Gerar PDF e Excel
-                col_btn1, col_btn2 = st.columns(2)
+                # --- BOTÕES DE AÇÃO ---
+                col_btn1, col_btn2, col_btn3 = st.columns([2, 2, 1])
 
                 with col_btn1:
                     pdf_bytes = gerar_pdf_rodante(registro_completo)
                     st.download_button(
-                        label="🖨️ Descarregar Relatório PDF",
+                        label="🖨️ Exportar PDF",
                         data=pdf_bytes,
                         file_name=f"Inspecao_Rodante_{registro_completo['frota']}_{registro_completo['data_inspecao']}.pdf",
                         mime="application/pdf",
@@ -693,11 +769,22 @@ with tab_historico:
                         excel_bytes = gerar_excel_rodante(registro_completo)
                         if excel_bytes:
                             st.download_button(
-                                label="📊 Descarregar Espelho Excel",
+                                label="📊 Exportar Excel",
                                 data=excel_bytes,
                                 file_name=f"Inspecao_Rodante_{registro_completo['frota']}_{registro_completo['data_inspecao']}.xlsx",
                                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                 use_container_width=True
                             )
-                    else:
-                        st.error("Instale 'openpyxl' para exportar Excel.")
+                with col_btn3:
+                    if st.button("🗑️ Excluir", use_container_width=True):
+                        deletar_inspecao(id_banco)
+                        st.success("Excluído com sucesso!")
+                        st.rerun()
+
+                st.markdown("---")
+                st.markdown("### ✏️ Formulário de Edição")
+                st.info(
+                    f"Visualizando os dados do **Técnico:** {registro_completo['tecnico']} | **Horímetro:** {registro_completo['horimetro']}")
+
+                # Renderiza o mesmo formulário, mas preenchido com os dados do banco!
+                render_form_vistoria(registro_completo)
