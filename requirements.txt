@@ -12,3 +12,10 @@ fpdf
 matplotlib
 xlrd>=2.0.1
 pytz
+streamlit>=1.30.0
+pandas>=2.0.0
+numpy>=1.24.0
+plotly>=5.15.0
+fpdf>=1.7.2
+openpyxl>=3.1.0
+pytz>=2022.1
